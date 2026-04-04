@@ -4,12 +4,31 @@ import { useSession, signOut } from "next-auth/react";
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { getActivities, getStats, timeAgo, type Activity } from "../../lib/activity";
+import { useSubscription } from "../../lib/useSubscription";
 
 export default function ProfilePage() {
   const { data: session, status } = useSession();
+  const { isPremium, currentPeriodEnd } = useSubscription();
   const [activities, setActivities] = useState<Activity[]>([]);
   const [stats, setStats] = useState({ total: 0, conversions: 0, edits: 0 });
   const [mounted, setMounted] = useState(false);
+  const [portalLoading, setPortalLoading] = useState(false);
+
+  const handlePortal = async () => {
+    if (!session?.user?.email) return;
+    setPortalLoading(true);
+    try {
+      const res = await fetch("/api/customer-portal", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: session.user.email }),
+      });
+      const data = await res.json();
+      if (data.url) window.location.href = data.url;
+    } finally {
+      setPortalLoading(false);
+    }
+  };
 
   useEffect(() => {
     setMounted(true);
@@ -249,6 +268,36 @@ export default function ProfilePage() {
                 <span className="ml-auto text-emerald-400">→</span>
               </Link>
             </div>
+          </div>
+
+          {/* Plan */}
+          <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm p-5">
+            <h2 className="font-bold text-gray-900 dark:text-white text-sm mb-3">Plan actual</h2>
+            {isPremium ? (
+              <div className="flex items-center justify-between">
+                <div>
+                  <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-yellow-400/20 text-yellow-700 rounded-full text-xs font-bold">✨ Premium</span>
+                  {currentPeriodEnd && (
+                    <p className="text-xs text-gray-400 mt-1">
+                      Renueva: {new Date(currentPeriodEnd).toLocaleDateString("es")}
+                    </p>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={handlePortal}
+                  disabled={portalLoading}
+                  className="text-xs text-blue-500 hover:text-blue-700 font-semibold disabled:opacity-50"
+                >
+                  {portalLoading ? "..." : "Gestionar →"}
+                </button>
+              </div>
+            ) : (
+              <div className="flex items-center justify-between">
+                <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-gray-100 dark:bg-gray-800 text-gray-500 rounded-full text-xs font-bold">Free</span>
+                <Link href="/pricing" className="text-xs text-yellow-600 hover:text-yellow-700 font-bold">Mejorar a Premium →</Link>
+              </div>
+            )}
           </div>
 
           {/* Sign out */}
