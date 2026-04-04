@@ -24,6 +24,9 @@ Pillow==11.1.0
 numpy==2.2.2
 opencv-python-headless==4.11.0.86
 
+# Database
+SQLAlchemy==2.0.38
+
 # Payments
 stripe==11.4.1
 
