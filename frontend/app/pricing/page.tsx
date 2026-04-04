@@ -12,7 +12,7 @@ const BASE_PRICE_USD = 9;
 
 export default function PricingPage() {
   const { data: session } = useSession();
-  const { isPremium, status, currentPeriodEnd, loading } = useSubscription();
+  const { isPremium, currentPeriodEnd, loading } = useSubscription();
   const { t, price } = useLocale();
   const p = t.pricing;
   const [mounted, setMounted] = useState(false);
