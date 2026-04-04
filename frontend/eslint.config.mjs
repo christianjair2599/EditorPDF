@@ -11,6 +11,14 @@ const compat = new FlatCompat({
 
 const eslintConfig = [
   ...compat.extends("next/core-web-vitals", "next/typescript"),
+  {
+    rules: {
+      // Allow unused variables when prefixed with _
+      "@typescript-eslint/no-unused-vars": ["error", { argsIgnorePattern: "^_", varsIgnorePattern: "^_" }],
+      // <img> is fine for external SVGs and user avatars in this project
+      "@next/next/no-img-element": "off",
+    },
+  },
 ];
 
 export default eslintConfig;

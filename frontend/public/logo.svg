@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 220 52" fill="none" role="img" aria-label="DocuFlow">
+  <defs>
+    <linearGradient id="brand" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#3B82F6"/>
+      <stop offset="100%" stop-color="#9333EA"/>
+    </linearGradient>
+    <linearGradient id="brandH" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#3B82F6"/>
+      <stop offset="100%" stop-color="#9333EA"/>
+    </linearGradient>
+  </defs>
+
+  <!-- ── Icon background ── -->
+  <rect width="52" height="52" rx="13" fill="url(#brand)"/>
+
+  <!-- ── Document body ── -->
+  <rect x="13" y="9" width="18" height="23" rx="2.5" fill="white" opacity="0.95"/>
+
+  <!-- ── Folded corner ── -->
+  <path d="M27 9 L31 13 L27 13 Z" fill="rgba(99,102,241,0.25)"/>
+  <path d="M27 9 L31 13 L27 13" stroke="rgba(255,255,255,0.5)" stroke-width="0.5" fill="none"/>
+
+  <!-- ── Text lines inside document ── -->
+  <rect x="15.5" y="16" width="8"  height="1.8" rx="0.9" fill="#6366F1" opacity="0.55"/>
+  <rect x="15.5" y="19.5" width="11" height="1.8" rx="0.9" fill="#6366F1" opacity="0.55"/>
+  <rect x="15.5" y="23" width="6"  height="1.8" rx="0.9" fill="#6366F1" opacity="0.55"/>
+
+  <!-- ── Flow arrow (curved, exiting document bottom-right) ── -->
+  <path d="M21 32 C24 32 27 28 32 28" stroke="white" stroke-width="2.2" stroke-linecap="round" fill="none"/>
+  <!-- Arrow head -->
+  <path d="M30 25.5 L32.5 28 L30 30.5" stroke="white" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+
+  <!-- ── Small dot origin ── -->
+  <circle cx="21" cy="32" r="1.5" fill="white" opacity="0.7"/>
+
+  <!-- ── Wordmark ── -->
+  <!-- "Docu" in dark -->
+  <text x="66" y="34"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
+        font-weight="900"
+        font-size="26"
+        letter-spacing="-0.5"
+        fill="#111827">Docu</text>
+
+  <!-- "Flow" in gradient (simulated via fill + clip) -->
+  <text x="124" y="34"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
+        font-weight="900"
+        font-size="26"
+        letter-spacing="-0.5"
+        fill="url(#brandH)">Flow</text>
+</svg>
