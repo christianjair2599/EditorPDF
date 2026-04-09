@@ -34,3 +34,13 @@ stripe==11.4.1
 python-docx==1.1.2
 python-pptx==1.0.2
 openpyxl==3.1.5
+
+# AI (Claude)
+anthropic>=0.40.0
+
+# OCR
+easyocr>=1.7.0
+
+# URL to file conversion
+beautifulsoup4>=4.12.0
+requests>=2.31.0

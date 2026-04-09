@@ -28,12 +28,23 @@ from reportlab.lib import colors
 
 app = FastAPI()
 
+ALLOWED_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv("ALLOWED_ORIGINS", "").split(",")
+    if origin.strip()
+] or [
+    "https://editorpdf-christian-mayangas-projects.vercel.app",
+    "https://docuflow-app.web.app",
+    "http://localhost:3000",
+    "http://localhost:3001",
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization"],
 )
 
 UPLOAD_DIR = "uploads"
@@ -727,6 +738,74 @@ async def convert_any(file: UploadFile = File(...), output_format: str = Form(..
         return {"error": f"Error en la conversión: {str(e)}"}
 
     return {"message": "Conversión exitosa", "output_file": os.path.basename(output_file)}
+
+
+# ── URL → PDF / Image / TXT / HTML ───────────────────────────────────────────
+@app.post("/url-to-pdf/")
+async def url_to_format(url: str = Form(...), output_format: str = Form("pdf")):
+    import re as _re
+    import requests as _req
+    from bs4 import BeautifulSoup
+
+    if not _re.match(r"^https?://", url):
+        return JSONResponse({"error": "URL inválida. Debe comenzar con http:// o https://"}, status_code=400)
+
+    file_id = str(uuid.uuid4())
+    fmt = output_format.lower()
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+
+    try:
+        resp = _req.get(url, timeout=30, headers=headers)
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "html.parser")
+        for tag in soup(["script", "style", "nav", "footer", "iframe", "noscript"]):
+            tag.decompose()
+
+        title = soup.title.string.strip() if soup.title and soup.title.string else url
+        paragraphs = [title, f"Fuente: {url}", ""]
+        for el in soup.find_all(["h1","h2","h3","h4","p","li","td","th","blockquote","pre"]):
+            t = el.get_text(separator=" ", strip=True)
+            if t:
+                paragraphs.append(t)
+
+        plain_text = "\n".join(paragraphs)
+
+        if fmt in ("pdf", "png", "jpg", "jpeg"):
+            pdf_path = os.path.join(UPLOAD_DIR, f"{file_id}_tmp.pdf")
+            text_to_pdf(plain_text, pdf_path)
+
+            if fmt == "pdf":
+                out_path = pdf_path
+            else:
+                pil_fmt = {"png": "PNG", "jpg": "JPEG", "jpeg": "JPEG"}[fmt]
+                out_path = os.path.join(UPLOAD_DIR, f"{file_id}.{fmt}")
+                imgs = pdf_to_image_list(pdf_path)
+                stitch_images(imgs, out_path, pil_fmt)
+                os.remove(pdf_path)
+
+        elif fmt == "txt":
+            out_path = os.path.join(UPLOAD_DIR, f"{file_id}.txt")
+            with open(out_path, "w", encoding="utf-8") as f:
+                f.write(plain_text)
+
+        elif fmt == "html":
+            out_path = os.path.join(UPLOAD_DIR, f"{file_id}.html")
+            with open(out_path, "w", encoding="utf-8") as f:
+                f.write(resp.text)
+
+        else:
+            return JSONResponse({"error": f"Formato '{fmt}' no soportado para URLs"}, status_code=400)
+
+    except _req.exceptions.ConnectionError:
+        return JSONResponse({"error": "No se pudo conectar a la URL. Verifica que el enlace sea accesible."}, status_code=400)
+    except _req.exceptions.Timeout:
+        return JSONResponse({"error": "La URL tardó demasiado en responder."}, status_code=400)
+    except _req.exceptions.HTTPError as e:
+        return JSONResponse({"error": f"La URL devolvió un error HTTP: {e.response.status_code}"}, status_code=400)
+    except Exception as e:
+        return JSONResponse({"error": f"Error al procesar la URL: {str(e)}"}, status_code=500)
+
+    return {"message": "Conversión exitosa", "output_file": os.path.basename(out_path)}
 
 
 # ── Legacy /convert/ ─────────────────────────────────────────────────────────
