@@ -1,7 +1,9 @@
+from contextlib import asynccontextmanager
+import threading
 from fastapi import FastAPI, File, UploadFile, Form, Request, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
-import shutil, os, uuid, json, csv, re
+import shutil, os, uuid, json, csv, re, time, hmac, hashlib
 import stripe
 import datetime
 from database import SessionLocal, engine
@@ -13,6 +15,12 @@ stripe.api_key = os.getenv("STRIPE_SECRET_KEY", "")
 STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
 STRIPE_PRICE_ID = os.getenv("STRIPE_PRICE_ID", "")
 FRONTEND_URL = os.getenv("FRONTEND_URL", "https://editorpdf-christian-mayangas-projects.vercel.app")
+
+# Lemon Squeezy
+LEMON_API_KEY      = os.getenv("LEMONSQUEEZY_API_KEY", "")
+LEMON_STORE_ID     = os.getenv("LEMONSQUEEZY_STORE_ID", "")
+LEMON_VARIANT_ID   = os.getenv("LEMONSQUEEZY_VARIANT_ID", "")
+LEMON_WEBHOOK_SECRET = os.getenv("LEMONSQUEEZY_WEBHOOK_SECRET", "")
 from pdf2docx import Converter
 import fitz  # PyMuPDF
 from PIL import Image as PILImage
@@ -26,7 +34,7 @@ from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, Tabl
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib import colors
 
-app = FastAPI()
+app = FastAPI(lifespan=lifespan)
 
 ALLOWED_ORIGINS = [
     origin.strip()
@@ -50,6 +58,54 @@ app.add_middleware(
 UPLOAD_DIR = "uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
+# ── File cleanup ──────────────────────────────────────────────────────────────
+
+_last_cleanup: float = 0
+
+def cleanup_old_files():
+    """Delete files older than 24 hours. Runs at most once per hour."""
+    global _last_cleanup
+    now = time.time()
+    if now - _last_cleanup < 3600:
+        return
+    _last_cleanup = now
+    cutoff = now - 86400  # 24 hours
+    try:
+        for filename in os.listdir(UPLOAD_DIR):
+            filepath = os.path.join(UPLOAD_DIR, filename)
+            if os.path.isfile(filepath) and os.path.getmtime(filepath) < cutoff:
+                os.remove(filepath)
+    except Exception as e:
+        print(f"Cleanup error: {e}")
+
+# ── OCR reader (pre-warmed at startup to avoid 30s request timeout) ───────────
+
+_ocr_reader = None
+_ocr_ready  = False
+_ocr_error  = None
+
+def _init_ocr_background():
+    global _ocr_reader, _ocr_ready, _ocr_error
+    try:
+        import easyocr
+        _ocr_reader = easyocr.Reader(['es', 'en'], gpu=False)
+        _ocr_ready = True
+        print("OCR reader ready")
+    except Exception as e:
+        _ocr_error = str(e)
+        print(f"OCR init failed: {e}")
+
+def get_ocr_reader():
+    if _ocr_error:
+        raise ImportError(f"OCR no disponible: {_ocr_error}")
+    if not _ocr_ready or _ocr_reader is None:
+        raise RuntimeError("OCR aún inicializando, intenta en unos segundos")
+    return _ocr_reader
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    threading.Thread(target=_init_ocr_background, daemon=True).start()
+    yield
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -175,16 +231,18 @@ def pdf_to_image_list(input_file: str) -> list:
 # ── Routes ────────────────────────────────────────────────────────────────────
 
 @app.get("/download/{filename}")
-async def download_file(filename: str):
+async def download_file(filename: str, name: str = ""):
     safe = os.path.basename(filename)
     path = os.path.join(UPLOAD_DIR, safe)
     if not os.path.exists(path):
         return {"error": "Archivo no encontrado"}
-    return FileResponse(path, filename=safe)
+    download_name = os.path.basename(name) if name else safe
+    return FileResponse(path, filename=download_name)
 
 
 @app.post("/upload/")
 async def upload_pdf(file: UploadFile = File(...)):
+    cleanup_old_files()
     file_id = str(uuid.uuid4())
     path = os.path.join(UPLOAD_DIR, f"{file_id}_{file.filename}")
     with open(path, "wb") as buf:
@@ -194,7 +252,9 @@ async def upload_pdf(file: UploadFile = File(...)):
 
 @app.post("/convert-any/")
 async def convert_any(file: UploadFile = File(...), output_format: str = Form(...)):
+    cleanup_old_files()
     file_id = str(uuid.uuid4())
+    original_name = os.path.splitext(file.filename or "archivo")[0]
     original_ext = os.path.splitext(file.filename or "")[1].lower().lstrip(".")
     safe_name = f"{file_id}.{original_ext}" if original_ext else f"{file_id}.bin"
     input_file = os.path.join(UPLOAD_DIR, safe_name)
@@ -737,7 +797,8 @@ async def convert_any(file: UploadFile = File(...), output_format: str = Form(..
     except Exception as e:
         return {"error": f"Error en la conversión: {str(e)}"}
 
-    return {"message": "Conversión exitosa", "output_file": os.path.basename(output_file)}
+    friendly_name = f"{original_name}.{fmt}"
+    return {"message": "Conversión exitosa", "output_file": os.path.basename(output_file), "friendly_name": friendly_name}
 
 
 # ── URL → PDF / Image / TXT / HTML ───────────────────────────────────────────
@@ -805,7 +866,12 @@ async def url_to_format(url: str = Form(...), output_format: str = Form("pdf")):
     except Exception as e:
         return JSONResponse({"error": f"Error al procesar la URL: {str(e)}"}, status_code=500)
 
-    return {"message": "Conversión exitosa", "output_file": os.path.basename(out_path)}
+    # Build a friendly filename from the URL hostname
+    from urllib.parse import urlparse
+    host = urlparse(url).hostname or "pagina"
+    host = host.replace("www.", "")
+    friendly_name = f"{host}.{fmt}"
+    return {"message": "Conversión exitosa", "output_file": os.path.basename(out_path), "friendly_name": friendly_name}
 
 
 # ── Legacy /convert/ ─────────────────────────────────────────────────────────
@@ -1097,7 +1163,6 @@ async def compress_pdf(file: UploadFile = File(...), quality: int = Form(2)):
 async def ocr_pdf(file: UploadFile = File(...)):
     """Extract text from images or scanned PDFs using OCR."""
     try:
-        import easyocr
         import numpy as np
 
         temp_path = os.path.join(UPLOAD_DIR, f"{uuid.uuid4()}_{file.filename}")
@@ -1105,7 +1170,7 @@ async def ocr_pdf(file: UploadFile = File(...)):
         with open(temp_path, "wb") as f:
             f.write(content)
 
-        reader = easyocr.Reader(['es', 'en'], gpu=False)
+        reader = get_ocr_reader()
         imgs = []
 
         # Convert PDF to images or load image directly
@@ -1141,8 +1206,8 @@ async def ocr_pdf(file: UploadFile = File(...)):
         os.remove(temp_path)
         return {"message": "OCR completado", "output_file": output_name}
 
-    except ImportError as e:
-        return {"error": f"Paquete faltante: {str(e)}. Instala easyocr."}
+    except (ImportError, RuntimeError) as e:
+        return {"error": str(e)}
     except Exception as e:
         print(f"OCR error: {str(e)}")
         return {"error": f"Error en OCR: {str(e)}"}
@@ -1338,6 +1403,96 @@ async def stripe_webhook(request: Request, stripe_signature: str = Header(None))
                 period_end = stripe_sub.get("current_period_end")
                 if period_end:
                     sub.current_period_end = datetime.datetime.utcfromtimestamp(period_end)
+                sub.updated_at = datetime.datetime.utcnow()
+                db.commit()
+    finally:
+        db.close()
+
+    return {"received": True}
+
+
+# ── Lemon Squeezy ─────────────────────────────────────────────────────────────
+
+@app.post("/lemon-checkout")
+async def lemon_checkout(request: Request):
+    """Return a Lemon Squeezy checkout URL with email pre-filled."""
+    try:
+        body = await request.json()
+        email = body.get("email", "")
+        variant_id = LEMON_VARIANT_ID
+        if not variant_id:
+            return JSONResponse({"error": "Lemon Squeezy no configurado"}, status_code=500)
+        import urllib.parse
+        base = f"https://docufloww.lemonsqueezy.com/checkout/buy/{variant_id}"
+        params = urllib.parse.urlencode({
+            "checkout[email]": email,
+            "checkout[custom][user_email]": email,
+        })
+        url = f"{base}?{params}"
+        return {"url": url}
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.post("/lemon-webhook")
+async def lemon_webhook(request: Request, x_signature: str = Header(None, alias="X-Signature")):
+    """Handle Lemon Squeezy webhook events."""
+    payload = await request.body()
+
+    # Verify signature
+    if LEMON_WEBHOOK_SECRET and LEMON_WEBHOOK_SECRET != "pending":
+        expected = hmac.new(
+            LEMON_WEBHOOK_SECRET.encode("utf-8"), payload, hashlib.sha256
+        ).hexdigest()
+        if not hmac.compare_digest(expected, x_signature or ""):
+            return JSONResponse({"error": "Invalid signature"}, status_code=400)
+
+    try:
+        data = json.loads(payload)
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+
+    event_name = data.get("meta", {}).get("event_name", "")
+    attrs = data.get("data", {}).get("attributes", {})
+    custom = data.get("meta", {}).get("custom_data", {})
+    email = custom.get("user_email") or attrs.get("user_email") or attrs.get("customer_email", "")
+
+    if not email:
+        # Try to get from order user email
+        email = attrs.get("user_email", "")
+
+    db = SessionLocal()
+    try:
+        if event_name in ("order_created", "subscription_created") and email:
+            sub = get_or_create_subscription(db, email)
+            sub.status = "active"
+            ends_at = attrs.get("ends_at") or attrs.get("renews_at")
+            if ends_at:
+                try:
+                    sub.current_period_end = datetime.datetime.fromisoformat(ends_at.replace("Z", "+00:00")).replace(tzinfo=None)
+                except Exception:
+                    pass
+            sub.updated_at = datetime.datetime.utcnow()
+            db.commit()
+
+        elif event_name == "subscription_updated" and email:
+            sub = db.query(Subscription).filter(Subscription.email == email).first()
+            if sub:
+                status = attrs.get("status", "")
+                sub.status = "active" if status == "active" else status
+                ends_at = attrs.get("ends_at") or attrs.get("renews_at")
+                if ends_at:
+                    try:
+                        sub.current_period_end = datetime.datetime.fromisoformat(ends_at.replace("Z", "+00:00")).replace(tzinfo=None)
+                    except Exception:
+                        pass
+                sub.updated_at = datetime.datetime.utcnow()
+                db.commit()
+
+        elif event_name in ("subscription_cancelled", "subscription_expired") and email:
+            sub = db.query(Subscription).filter(Subscription.email == email).first()
+            if sub:
+                sub.status = "canceled"
                 sub.updated_at = datetime.datetime.utcnow()
                 db.commit()
     finally:
