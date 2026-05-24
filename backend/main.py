@@ -1,5 +1,3 @@
-from contextlib import asynccontextmanager
-import threading
 from fastapi import FastAPI, File, UploadFile, Form, Request, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
@@ -34,7 +32,7 @@ from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, Tabl
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib import colors
 
-app = FastAPI(lifespan=lifespan)
+app = FastAPI()
 
 ALLOWED_ORIGINS = [
     origin.strip()
@@ -78,34 +76,6 @@ def cleanup_old_files():
     except Exception as e:
         print(f"Cleanup error: {e}")
 
-# ── OCR reader (pre-warmed at startup to avoid 30s request timeout) ───────────
-
-_ocr_reader = None
-_ocr_ready  = False
-_ocr_error  = None
-
-def _init_ocr_background():
-    global _ocr_reader, _ocr_ready, _ocr_error
-    try:
-        import easyocr
-        _ocr_reader = easyocr.Reader(['es', 'en'], gpu=False)
-        _ocr_ready = True
-        print("OCR reader ready")
-    except Exception as e:
-        _ocr_error = str(e)
-        print(f"OCR init failed: {e}")
-
-def get_ocr_reader():
-    if _ocr_error:
-        raise ImportError(f"OCR no disponible: {_ocr_error}")
-    if not _ocr_ready or _ocr_reader is None:
-        raise RuntimeError("OCR aún inicializando, intenta en unos segundos")
-    return _ocr_reader
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    threading.Thread(target=_init_ocr_background, daemon=True).start()
-    yield
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -1161,53 +1131,43 @@ async def compress_pdf(file: UploadFile = File(...), quality: int = Form(2)):
 
 @app.post("/ocr-pdf/")
 async def ocr_pdf(file: UploadFile = File(...)):
-    """Extract text from images or scanned PDFs using OCR."""
+    """Extract text from images or scanned PDFs using OCR (pytesseract)."""
     try:
-        import numpy as np
+        import pytesseract
 
         temp_path = os.path.join(UPLOAD_DIR, f"{uuid.uuid4()}_{file.filename}")
         content = await file.read()
         with open(temp_path, "wb") as f:
             f.write(content)
 
-        reader = get_ocr_reader()
         imgs = []
-
-        # Convert PDF to images or load image directly
-        if file.filename.lower().endswith(".pdf"):
+        fname = (file.filename or "").lower()
+        if fname.endswith(".pdf"):
             doc = fitz.open(temp_path)
             for page_idx, page in enumerate(doc):
-                pix = page.get_pixmap(matrix=fitz.Matrix(1.5, 1.5))
+                pix = page.get_pixmap(matrix=fitz.Matrix(2.0, 2.0))
                 img = PILImage.frombytes("RGB", [pix.width, pix.height], pix.samples)
                 imgs.append((page_idx + 1, img))
             doc.close()
         else:
-            img = PILImage.open(temp_path)
-            imgs.append((1, img))
+            imgs.append((1, PILImage.open(temp_path)))
 
         all_text = []
-
         for page_num, img in imgs:
-            img_arr = np.array(img)
             try:
-                results = reader.readtext(img_arr, detail=0)  # detail=0 returns just text
-                page_text = "\n".join(results)
-                all_text.append(f"--- PÁGINA {page_num} ---\n{page_text}")
+                text = pytesseract.image_to_string(img, lang="spa+eng")
+                all_text.append(f"--- PÁGINA {page_num} ---\n{text.strip()}")
             except Exception as e:
-                print(f"OCR page {page_num} error: {str(e)}")
-                all_text.append(f"--- PÁGINA {page_num} ---\nNo se pudo procesar la página")
+                all_text.append(f"--- PÁGINA {page_num} ---\nNo se pudo procesar: {e}")
 
         output_name = f"{uuid.uuid4()}_ocr.txt"
         output_path = os.path.join(UPLOAD_DIR, output_name)
-
         with open(output_path, "w", encoding="utf-8") as f:
             f.write("\n\n".join(all_text))
 
         os.remove(temp_path)
         return {"message": "OCR completado", "output_file": output_name}
 
-    except (ImportError, RuntimeError) as e:
-        return {"error": str(e)}
     except Exception as e:
         print(f"OCR error: {str(e)}")
         return {"error": f"Error en OCR: {str(e)}"}
