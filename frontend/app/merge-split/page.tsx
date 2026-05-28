@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { mergePdf, splitPdf, compressPdf, ocrPdf, watermarkPdf, shareFile, API_URL } from "../api/upload";
 import { addActivity } from "../../lib/activity";
 import { canUse, canOperate, incrementOps } from "../../lib/plan";
@@ -10,6 +10,11 @@ type Tool = "merge" | "split" | "compress" | "ocr" | "watermark";
 type Alert = { type: "success" | "error"; text: string };
 
 export default function MergeSplitPage() {
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
   const [activeTool, setActiveTool] = useState<Tool>("merge");
   const [files, setFiles] = useState<File[]>([]);
   const [isDragging, setIsDragging] = useState(false);
@@ -17,8 +22,8 @@ export default function MergeSplitPage() {
   const [alert, setAlert] = useState<Alert | null>(null);
   const [resultFile, setResultFile] = useState<string | null>(null);
   const [pdfPages, setPdfPages] = useState(0);
-  const [startPage, setStartPage] = useState(0);
-  const [endPage, setEndPage] = useState(0);
+  const [startPage, setStartPage] = useState(1);
+  const [endPage, setEndPage] = useState(1);
   const [watermarkText, setWatermarkText] = useState("CONFIDENCIAL");
   const [watermarkColor, setWatermarkColor] = useState("#FF0000");
   const [watermarkSize, setWatermarkSize] = useState(48);
@@ -75,7 +80,8 @@ export default function MergeSplitPage() {
           const pdf = await import("pdfjs-dist").then((m) => m.getDocument(reader.result as ArrayBuffer));
           const numPages = (await pdf.promise).numPages;
           setPdfPages(numPages);
-          setEndPage(numPages - 1);
+          setStartPage(1);
+          setEndPage(numPages);
         } catch {
           setPdfPages(0);
         }
@@ -110,12 +116,12 @@ export default function MergeSplitPage() {
       return;
     }
     setIsLoading(true);
-    const res = await splitPdf(files[0], startPage, endPage);
+    const res = await splitPdf(files[0], startPage - 1, endPage - 1);
     setIsLoading(false);
     if (res?.output_file) {
       incrementOps();
       setResultFile(res.output_file);
-      setAlert({ type: "success", text: `PDF dividido (páginas ${startPage + 1}-${endPage + 1}).` });
+      setAlert({ type: "success", text: `PDF dividido (páginas ${startPage}-${endPage}).` });
       addActivity({ type: "convert", filename: files[0].name, format: "PDF (dividido)" });
     } else {
       setAlert({ type: "error", text: res?.error || "Error al dividir." });
@@ -253,7 +259,7 @@ export default function MergeSplitPage() {
             const icons = { merge: "🔗", split: "✂️", compress: "📦", ocr: "📖", watermark: "💧" };
             const labels = { merge: "Fusionar", split: "Dividir", compress: "Comprimir", ocr: "OCR", watermark: "Marca agua" };
             const premiumTools = { ocr: true, watermark: true } as Record<string, boolean>;
-            const isLocked = premiumTools[t] && !canUse(t === "ocr" ? "ocr" : "watermark");
+            const isLocked = !mounted || (premiumTools[t] && !canUse(t === "ocr" ? "ocr" : "watermark"));
             return (
               <button
                 key={t}
@@ -345,8 +351,8 @@ export default function MergeSplitPage() {
                       <label className="text-xs text-gray-600 dark:text-gray-400 block mb-2">Página inicio</label>
                       <input
                         type="number"
-                        min={0}
-                        max={pdfPages - 1}
+                        min={1}
+                        max={pdfPages}
                         value={startPage}
                         onChange={(e) => setStartPage(Number(e.target.value))}
                         className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm"
@@ -356,8 +362,8 @@ export default function MergeSplitPage() {
                       <label className="text-xs text-gray-600 dark:text-gray-400 block mb-2">Página fin</label>
                       <input
                         type="number"
-                        min={0}
-                        max={pdfPages - 1}
+                        min={1}
+                        max={pdfPages}
                         value={endPage}
                         onChange={(e) => setEndPage(Number(e.target.value))}
                         className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm"
@@ -447,7 +453,7 @@ export default function MergeSplitPage() {
                   className="px-4 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold transition-all whitespace-nowrap"
                   title="Copiar enlace para compartir"
                 >
-                  {isCopied ? "✅ Copiado" : canUse("share") ? "🔗 Compartir" : "👑 Compartir"}
+                  {isCopied ? "✅ Copiado" : (!mounted || !canUse("share")) ? "👑 Compartir" : "🔗 Compartir"}
                 </button>
               </>
             )}

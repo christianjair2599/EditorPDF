@@ -1,0 +1,41 @@
+# Dependencies
+node_modules/
+frontend/node_modules/
+
+# Next.js build
+frontend/.next/
+frontend/out/
+
+# Environment — NEVER commit these
+frontend/.env.local
+frontend/.env.production.local
+.env
+.env.local
+
+# Python
+__pycache__/
+backend/__pycache__/
+*.pyc
+*.pyo
+backend/editorpdf.db
+backend/docuflow.db
+backend/*.log
+
+# Uploads (user files)
+backend/uploads/
+
+# Firebase
+.firebase/
+firebase-debug.log
+hosting/.cache/
+
+# OS
+.DS_Store
+Thumbs.db
+
+.vercel
+.env*.local
+
+# System & temporary files
+*.log
+*_tmp.pdf

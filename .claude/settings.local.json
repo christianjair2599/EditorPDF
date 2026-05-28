@@ -1,0 +1,27 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls /c/Users/User/Downloads/EditorPDF/backend/uploads/*.pdf)",
+      "Bash(pip install:*)",
+      "Bash(python -c \"from PIL import Image; print\\(''Pillow instalado OK''\\)\")",
+      "Bash(python -c \"from PIL import Image; print\\(''''OK''''\\)\")",
+      "Bash(.venv/Scripts/pip install:*)",
+      "Bash(.venv/Scripts/python -c \"from PIL import Image; print\\(''Pillow OK en .venv''\\)\")",
+      "Bash(.venv/Scripts/python.exe -m pip install Pillow -q)",
+      "Bash(.venv/Scripts/python.exe -c \"from PIL import Image; print\\(''Pillow OK''\\)\")",
+      "Bash(curl -s -X POST \"http://localhost:8000/convert/\" -F \"file=@uploads/fcf8327a-573a-4f92-a140-83dd3e9bb7e1.pdf\" -F \"output_format=png\")",
+      "Bash(.venv/Scripts/python.exe -c \":*)",
+      "Bash(python -c \":*)",
+      "Bash(curl -s http://localhost:8000/)",
+      "Bash(/c/Users/User/Downloads/EditorPDF/.venv/Scripts/python.exe -m pip install anthropic -q)",
+      "Bash(/c/Users/User/Downloads/EditorPDF/.venv/Scripts/python.exe -c \"import anthropic; print\\(''''anthropic'''', anthropic.__version__\\)\")",
+      "Bash(curl -s http://localhost:8000/docs)",
+      "Bash(curl -s http://localhost:8000/openapi.json)",
+      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(list\\(d[''''paths''''].keys\\(\\)\\)\\)\")",
+      "Bash(../.venv/Scripts/python.exe -c \"import main; print\\(''OK''\\)\")",
+      "Bash(\"c:\\\\Users\\\\User\\\\Downloads\\\\EditorPDF\\\\.venv\\\\Scripts\\\\python.exe\" -c \"import main; print\\(''OK''\\)\")",
+      "Bash(\"c:\\\\Users\\\\User\\\\Downloads\\\\EditorPDF\\\\.venv\\\\Scripts\\\\python.exe\" -c \":*)",
+      "Bash(.venv/Scripts/python.exe -c \"import fitz; print\\(fitz.__version__\\)\")"
+    ]
+  }
+}

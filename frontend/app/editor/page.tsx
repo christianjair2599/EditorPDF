@@ -27,12 +27,18 @@ export default function EditorPage() {
   const [blocks, setBlocks]           = useState<TextBlock[]>([]);
   const [pendingEdits, setPendingEdits] = useState<Record<string, BlockEdit>>({});
   const [selectedId, setSelectedId]   = useState<string | null>(null);
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
   const [editForm, setEditForm]       = useState<Partial<BlockEdit>>({});
   const [search, setSearch]           = useState("");
   const [isDragging, setIsDragging]   = useState(false);
   const [isExtracting, setIsExtracting] = useState(false);
   const [isApplying, setIsApplying]   = useState(false);
   const [isImprovingAI, setIsImprovingAI] = useState(false);
+  const [lastAIText, setLastAIText]   = useState<string | null>(null);
   const [alert, setAlert]             = useState<AlertType | null>(null);
   const [resultFile, setResultFile]   = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -72,7 +78,11 @@ export default function EditorPage() {
     if (res?.blocks) {
       setBlocks(res.blocks);
       setFileId(res.file_id);
-      setAlert({ type: "success", text: `${res.blocks.length} bloques de texto detectados. Haz clic en uno para editarlo.` });
+      if (res.blocks.length > 0) {
+        setAlert({ type: "success", text: `${res.blocks.length} bloques de texto detectados. Haz clic en uno para editarlo.` });
+      } else {
+        setAlert({ type: "info", text: "No se detectaron bloques de texto editables. Si este PDF es una imagen o un escaneo, puedes extraer su texto usando la herramienta OCR." });
+      }
     } else {
       setAlert({ type: "error", text: res?.error || "Error al extraer texto." });
     }
@@ -128,17 +138,20 @@ export default function EditorPage() {
 
   // ── AI improvement ───────────────────────────────────────────────────────
 
-  const handleImproveAI = async () => {
+  const handleImproveAI = async (textOverride?: string) => {
     if (!canUse("ai")) { aiGate.setOpen(true); return; }
-    if (!editForm.new_text) return;
+    const text = textOverride ?? editForm.new_text;
+    if (!text) return;
+    setLastAIText(text);
     setIsImprovingAI(true);
-    const res = await improveText(editForm.new_text);
+    const res = await improveText(text);
     setIsImprovingAI(false);
     if (res?.improved_text) {
       setEditForm(prev => ({ ...prev, new_text: res.improved_text }));
+      setLastAIText(null);
       setAlert({ type: "success", text: "Texto mejorado por IA. Revisa y guarda el cambio." });
     } else {
-      setAlert({ type: "error", text: res?.error || "Error con IA." });
+      setAlert({ type: "error", text: res?.error || "Error con IA. Puedes reintentar." });
     }
   };
 
@@ -230,10 +243,10 @@ export default function EditorPage() {
 
         ) : (
           /* ── Editor layout ── */
-          <div className="flex gap-4 h-[calc(100vh-160px)]">
+          <div className="flex flex-col lg:flex-row gap-4 lg:h-[calc(100vh-160px)]">
 
             {/* Left: PDF preview */}
-            <div className="flex-1 bg-white rounded-2xl border shadow-sm overflow-hidden flex flex-col min-w-0">
+            <div className="flex-1 bg-white rounded-2xl border shadow-sm overflow-hidden flex flex-col min-w-0 min-h-[300px] lg:min-h-0">
               <div className="flex items-center justify-between px-4 py-2 bg-gray-50 border-b flex-shrink-0">
                 <div className="flex items-center gap-2 min-w-0">
                   <span className="text-gray-400 flex-shrink-0">📄</span>
@@ -252,11 +265,11 @@ export default function EditorPage() {
                   ✕ Cambiar
                 </button>
               </div>
-              <iframe src={previewUrl || ""} className="flex-1 w-full" title="Vista previa del PDF" />
+              <iframe src={previewUrl || ""} className="flex-1 w-full min-h-[280px] lg:min-h-0" title="Vista previa del PDF" />
             </div>
 
             {/* Right: Control panel */}
-            <div className="w-96 flex flex-col gap-3 flex-shrink-0 overflow-hidden">
+            <div className="w-full lg:w-96 flex flex-col gap-3 lg:flex-shrink-0 overflow-hidden">
 
               {/* Alert */}
               {alert && (
@@ -415,22 +428,41 @@ export default function EditorPage() {
                     <span className="text-xs text-gray-400 font-mono">{(editForm.color ?? "#000000").toUpperCase()}</span>
                   </div>
 
-                  {/* AI improve */}
-                  <button
-                    type="button"
-                    onClick={handleImproveAI}
-                    disabled={isImprovingAI}
-                    className={`w-full py-2.5 border-2 rounded-xl text-sm font-semibold transition-all disabled:opacity-50 flex items-center justify-center gap-2 ${
-                      canUse("ai")
-                        ? "border-purple-200 text-purple-700 hover:bg-purple-50"
-                        : "border-yellow-300 text-yellow-700 dark:border-yellow-700 dark:text-yellow-400 hover:bg-yellow-50 dark:hover:bg-yellow-900/10"
-                    }`}
-                  >
-                    {isImprovingAI
-                      ? <><svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/></svg>Mejorando con IA...</>
-                      : canUse("ai") ? <>✨ Mejorar con IA</> : <>👑 Mejorar con IA · Premium</>
-                    }
-                  </button>
+                  {/* AI improve + retry */}
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => handleImproveAI()}
+                      disabled={isImprovingAI}
+                      className={`flex-1 py-2.5 border-2 rounded-xl text-sm font-semibold transition-all disabled:opacity-50 flex items-center justify-center gap-2 ${
+                        !mounted
+                          ? "border-gray-200 text-gray-400 cursor-default bg-gray-50/50"
+                          : canUse("ai")
+                          ? "border-purple-200 text-purple-700 hover:bg-purple-50"
+                          : "border-yellow-300 text-yellow-700 dark:border-yellow-700 dark:text-yellow-400 hover:bg-yellow-50 dark:hover:bg-yellow-900/10"
+                      }`}
+                    >
+                      {isImprovingAI ? (
+                        <><svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/></svg>Mejorando...</>
+                      ) : !mounted ? (
+                        <>Cargando IA...</>
+                      ) : canUse("ai") ? (
+                        <>✨ Mejorar con IA</>
+                      ) : (
+                        <>👑 Mejorar · Premium</>
+                      )}
+                    </button>
+                    {lastAIText && !isImprovingAI && (
+                      <button
+                        type="button"
+                        onClick={() => handleImproveAI(lastAIText)}
+                        title="Reintentar mejora con IA"
+                        className="px-3 py-2.5 border-2 border-purple-200 text-purple-600 rounded-xl text-sm hover:bg-purple-50 transition-all"
+                      >
+                        ↺
+                      </button>
+                    )}
+                  </div>
 
                   {/* Save edit */}
                   <button

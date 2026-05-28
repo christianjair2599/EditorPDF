@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { convertAny, shareFile, API_URL } from "../api/upload";
+import { convertAny, convertUrl, shareFile, API_URL } from "../api/upload";
 import { addActivity, getPrefs, savePrefs } from "../../lib/activity";
 import { canUse, canOperate, fileSizeAllowed, incrementOps, FREE_MAX_FILE_MB } from "../../lib/plan";
 import { usePremiumGate, DailyUsageBanner } from "../../components/PremiumGate";
@@ -46,41 +46,55 @@ const OUTPUT_FORMATS: Record<string, {
 
 // ── Input type metadata ────────────────────────────────────────────────────
 const INPUT_INFO: Record<string, { icon: string; label: string; color: string }> = {
-  pdf:  { icon: "📕", label: "PDF",            color: "text-red-600 bg-red-50 border-red-200" },
-  docx: { icon: "📝", label: "Word",           color: "text-blue-600 bg-blue-50 border-blue-200" },
-  doc:  { icon: "📝", label: "Word (legacy)",  color: "text-blue-600 bg-blue-50 border-blue-200" },
-  pptx: { icon: "📊", label: "PowerPoint",     color: "text-orange-600 bg-orange-50 border-orange-200" },
-  ppt:  { icon: "📊", label: "PPT (legacy)",   color: "text-orange-600 bg-orange-50 border-orange-200" },
-  xlsx: { icon: "📗", label: "Excel",          color: "text-green-700 bg-green-50 border-green-200" },
-  xls:  { icon: "📗", label: "Excel (legacy)", color: "text-green-700 bg-green-50 border-green-200" },
-  csv:  { icon: "📋", label: "CSV",            color: "text-emerald-600 bg-emerald-50 border-emerald-200" },
-  jpg:  { icon: "🖼️", label: "JPG",            color: "text-yellow-600 bg-yellow-50 border-yellow-200" },
-  jpeg: { icon: "🖼️", label: "JPEG",           color: "text-yellow-600 bg-yellow-50 border-yellow-200" },
-  png:  { icon: "🎨", label: "PNG",            color: "text-purple-600 bg-purple-50 border-purple-200" },
-  webp: { icon: "🌄", label: "WebP",           color: "text-teal-600 bg-teal-50 border-teal-200" },
-  bmp:  { icon: "🖼️", label: "BMP",            color: "text-slate-600 bg-slate-50 border-slate-200" },
-  gif:  { icon: "🎞️", label: "GIF",            color: "text-pink-600 bg-pink-50 border-pink-200" },
-  tiff: { icon: "🔬", label: "TIFF",           color: "text-indigo-600 bg-indigo-50 border-indigo-200" },
-  txt:  { icon: "📄", label: "Texto plano",    color: "text-gray-600 bg-gray-50 border-gray-200" },
-  html: { icon: "🌐", label: "HTML",           color: "text-orange-600 bg-orange-50 border-orange-200" },
-  htm:  { icon: "🌐", label: "HTML",           color: "text-orange-600 bg-orange-50 border-orange-200" },
+  pdf:  { icon: "📕", label: "PDF",            color: "text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-950/20 border-red-200 dark:border-red-900/30" },
+  docx: { icon: "📝", label: "Word",           color: "text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-950/20 border-blue-200 dark:border-blue-900/30" },
+  doc:  { icon: "📝", label: "Word (legacy)",  color: "text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-950/20 border-blue-200 dark:border-blue-900/30" },
+  pptx: { icon: "📊", label: "PowerPoint",     color: "text-orange-600 dark:text-orange-400 bg-orange-50 dark:bg-orange-950/20 border-orange-200 dark:border-orange-900/30" },
+  ppt:  { icon: "📊", label: "PPT (legacy)",   color: "text-orange-600 dark:text-orange-400 bg-orange-50 dark:bg-orange-950/20 border-orange-200 dark:border-orange-900/30" },
+  xlsx: { icon: "📗", label: "Excel",          color: "text-green-700 dark:text-green-400 bg-green-50 dark:bg-green-950/20 border-green-200 dark:border-green-900/30" },
+  xls:  { icon: "📗", label: "Excel (legacy)", color: "text-green-700 dark:text-green-400 bg-green-50 dark:bg-green-950/20 border-green-200 dark:border-green-900/30" },
+  csv:  { icon: "📋", label: "CSV",            color: "text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/20 border-emerald-200 dark:border-emerald-900/30" },
+  jpg:  { icon: "🖼️", label: "JPG",            color: "text-yellow-600 dark:text-yellow-400 bg-yellow-50 dark:bg-yellow-950/20 border-yellow-200 dark:border-yellow-900/30" },
+  jpeg: { icon: "🖼️", label: "JPEG",           color: "text-yellow-600 dark:text-yellow-400 bg-yellow-50 dark:bg-yellow-950/20 border-yellow-200 dark:border-yellow-900/30" },
+  png:  { icon: "🎨", label: "PNG",            color: "text-purple-600 dark:text-purple-400 bg-purple-50 dark:bg-purple-950/20 border-purple-200 dark:border-purple-900/30" },
+  webp: { icon: "🌄", label: "WebP",           color: "text-teal-600 dark:text-teal-400 bg-teal-50 dark:bg-teal-950/20 border-teal-200 dark:border-teal-900/30" },
+  bmp:  { icon: "🖼️", label: "BMP",            color: "text-slate-600 dark:text-slate-400 bg-slate-50 dark:bg-slate-950/20 border-slate-200 dark:border-slate-900/30" },
+  gif:  { icon: "🎞️", label: "GIF",            color: "text-pink-600 dark:text-pink-400 bg-pink-50 dark:bg-pink-950/20 border-pink-200 dark:border-pink-900/30" },
+  tiff: { icon: "🔬", label: "TIFF",           color: "text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/20 border-indigo-200 dark:border-indigo-900/30" },
+  txt:  { icon: "📄", label: "Texto plano",    color: "text-gray-600 dark:text-gray-400 bg-gray-50 dark:bg-gray-950/20 border-gray-200 dark:border-gray-900/30" },
+  html: { icon: "🌐", label: "HTML",           color: "text-orange-600 dark:text-orange-400 bg-orange-50 dark:bg-orange-950/20 border-orange-200 dark:border-orange-900/30" },
+  htm:  { icon: "🌐", label: "HTML",           color: "text-orange-600 dark:text-orange-400 bg-orange-50 dark:bg-orange-950/20 border-orange-200 dark:border-orange-900/30" },
 };
 
 // Category groups for the supported types banner
 const INPUT_CATEGORIES = [
-  { label: "Documentos", color: "bg-blue-50 text-blue-700 border-blue-200", exts: ["pdf","docx","doc","txt","html"] },
-  { label: "Hojas",      color: "bg-green-50 text-green-700 border-green-200", exts: ["xlsx","xls","csv"] },
-  { label: "Slides",     color: "bg-orange-50 text-orange-700 border-orange-200", exts: ["pptx","ppt"] },
-  { label: "Imágenes",   color: "bg-yellow-50 text-yellow-700 border-yellow-200", exts: ["jpg","jpeg","png","webp","bmp","gif","tiff"] },
-  { label: "Datos",      color: "bg-violet-50 text-violet-700 border-violet-200", exts: ["json","xml"] },
+  { label: "Documentos", color: "bg-blue-50 dark:bg-blue-950/30 text-blue-700 dark:text-blue-300 border-blue-200 dark:border-blue-800/40", exts: ["pdf","docx","doc","txt","html"] },
+  { label: "Hojas",      color: "bg-green-50 dark:bg-green-950/30 text-green-700 dark:text-green-300 border-green-200 dark:border-green-800/40", exts: ["xlsx","xls","csv"] },
+  { label: "Slides",     color: "bg-orange-50 dark:bg-orange-950/30 text-orange-700 dark:text-orange-300 border-orange-200 dark:border-orange-800/40", exts: ["pptx","ppt"] },
+  { label: "Imágenes",   color: "bg-yellow-50 dark:bg-yellow-950/30 text-yellow-700 dark:text-yellow-300 border-yellow-200 dark:border-yellow-800/40", exts: ["jpg","jpeg","png","webp","bmp","gif","tiff"] },
+  { label: "Datos",      color: "bg-violet-50 dark:bg-violet-950/30 text-violet-700 dark:text-violet-300 border-violet-200 dark:border-violet-800/40", exts: ["json","xml"] },
 ];
 
 const ACCEPTED_EXTS = Object.keys(CONVERSION_MAP).map((e) => `.${e}`).join(",");
+
+// ── URL conversion formats ─────────────────────────────────────────────────
+const URL_FORMATS: { fmt: string; label: string; icon: string; description: string; card: string; btn: string }[] = [
+  { fmt: "pdf",  label: "PDF",  icon: "📕", description: "Página completa",  card: "border-red-400 bg-red-50 text-red-700",      btn: "bg-red-600 hover:bg-red-700" },
+  { fmt: "png",  label: "PNG",  icon: "🎨", description: "Captura de pantalla", card: "border-purple-400 bg-purple-50 text-purple-700", btn: "bg-purple-600 hover:bg-purple-700" },
+  { fmt: "jpg",  label: "JPG",  icon: "🖼️", description: "Captura comprimida", card: "border-yellow-400 bg-yellow-50 text-yellow-700", btn: "bg-yellow-500 hover:bg-yellow-600" },
+  { fmt: "txt",  label: "TXT",  icon: "📄", description: "Solo texto",        card: "border-gray-400 bg-gray-50 text-gray-700",   btn: "bg-gray-600 hover:bg-gray-700" },
+  { fmt: "html", label: "HTML", icon: "🌐", description: "Código fuente",     card: "border-orange-400 bg-orange-50 text-orange-700", btn: "bg-orange-500 hover:bg-orange-600" },
+];
 
 type Alert = { type: "success" | "error"; text: string };
 function getExt(name: string) { return name.split(".").pop()?.toLowerCase() ?? ""; }
 
 export default function ConverterPage() {
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
   const [file, setFile]               = useState<File | null>(null);
   const [files, setFiles]             = useState<File[]>([]);
   const [isBatch, setIsBatch]         = useState(false);
@@ -88,12 +102,22 @@ export default function ConverterPage() {
   const [selectedFmt, setSelectedFmt] = useState("");
   const [isDragging, setIsDragging]   = useState(false);
   const [isLoading, setIsLoading]     = useState(false);
+  const [batchProgress, setBatchProgress] = useState<{ done: number; total: number } | null>(null);
   const [alert, setAlert]             = useState<Alert | null>(null);
   const [resultFile, setResultFile]   = useState<string | null>(null);
+  const [friendlyName, setFriendlyName] = useState<string | null>(null);
   const [, setBatchResults] = useState<string[]>([]);
   const [shareUrl, setShareUrl]       = useState<string | null>(null);
   const [isCopied, setIsCopied]       = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const batchInputRef = useRef<HTMLInputElement>(null);
+  const [batchFileExt, setBatchFileExt] = useState("");
+
+  // URL mode
+  const [isUrlMode, setIsUrlMode]     = useState(false);
+  const [urlInput, setUrlInput]       = useState("");
+  const [urlFmt, setUrlFmt]           = useState("pdf");
+  const [urlError, setUrlError]       = useState("");
 
   const batchGate  = usePremiumGate("batch");
   const shareGate  = usePremiumGate("share");
@@ -105,6 +129,7 @@ export default function ConverterPage() {
     setFileExt(ext);
     setSelectedFmt("");
     setResultFile(null);
+    setFriendlyName(null);
     setAlert(null);
     const available = CONVERSION_MAP[ext] ?? [];
     const { lastFormat } = getPrefs();
@@ -114,6 +139,8 @@ export default function ConverterPage() {
   const available      = CONVERSION_MAP[fileExt] ?? [];
   const inputInfo      = INPUT_INFO[fileExt];
   const selectedDef    = selectedFmt ? OUTPUT_FORMATS[selectedFmt] : null;
+  const batchAvailable = CONVERSION_MAP[batchFileExt] ?? [];
+  const batchInputInfo = INPUT_INFO[batchFileExt];
 
   const handleFileSelect = (f: File) => {
     const ext = getExt(f.name);
@@ -132,8 +159,30 @@ export default function ConverterPage() {
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
     setIsDragging(false);
-    const f = e.dataTransfer.files[0];
-    if (f) handleFileSelect(f);
+    if (isBatch) {
+      const dropped = Array.from(e.dataTransfer.files);
+      if (dropped.length > 0) handleBatchFileSelect(dropped);
+    } else {
+      const f = e.dataTransfer.files[0];
+      if (f) handleFileSelect(f);
+    }
+  };
+
+  const handleBatchFileSelect = (newFiles: File[]) => {
+    const valid = newFiles.filter((f) => CONVERSION_MAP[getExt(f.name)]);
+    if (valid.length === 0) {
+      setAlert({ type: "error", text: "Ningún archivo compatible seleccionado." });
+      return;
+    }
+    if (batchFileExt === "" && valid.length > 0) {
+      const ext = getExt(valid[0].name);
+      setBatchFileExt(ext);
+      const avail = CONVERSION_MAP[ext] ?? [];
+      setSelectedFmt(avail[0] ?? "");
+    }
+    setFiles((prev) => [...prev, ...valid]);
+    setAlert(null);
+    setResultFile(null);
   };
 
   const handleFormatChange = (fmt: string) => {
@@ -148,7 +197,7 @@ export default function ConverterPage() {
     try {
       const resp = await fetch(`${API_URL}/download/${resultFile}`);
       const blob = await resp.blob();
-      const f = new File([blob], resultFile, { type: blob.type });
+      const f = new File([blob], friendlyName ?? resultFile, { type: blob.type });
       const res = await shareFile(f);
       if (res?.token) {
         const url = `${API_URL}/download/${res.filename}`;
@@ -168,16 +217,21 @@ export default function ConverterPage() {
     if (isBatch && files.length > 0 && selectedFmt) {
       setIsLoading(true);
       setAlert(null);
+      setBatchProgress({ done: 0, total: files.length });
       const results: string[] = [];
-      for (const f of files) {
+      for (let i = 0; i < files.length; i++) {
+        if (!canOperate()) { limitGate.setOpen(true); break; }
+        const f = files[i];
         const res = await convertAny(f, selectedFmt);
         if (res?.output_file) {
           results.push(res.output_file);
           incrementOps();
           addActivity({ type: "convert", filename: f.name, format: OUTPUT_FORMATS[selectedFmt]?.ext ?? selectedFmt.toUpperCase() });
         }
+        setBatchProgress({ done: i + 1, total: files.length });
       }
       setIsLoading(false);
+      setBatchProgress(null);
       if (results.length === files.length) {
         setBatchResults(results);
         setAlert({ type: "success", text: `${results.length} archivos convertidos correctamente.` });
@@ -192,12 +246,37 @@ export default function ConverterPage() {
       if (res?.output_file) {
         incrementOps();
         setResultFile(res.output_file);
+        setFriendlyName(res.friendly_name ?? null);
         const fmt = OUTPUT_FORMATS[selectedFmt];
         setAlert({ type: "success", text: `¡Conversión a ${fmt?.ext ?? selectedFmt.toUpperCase()} exitosa!` });
         addActivity({ type: "convert", filename: file.name, format: fmt?.ext ?? selectedFmt.toUpperCase() });
       } else {
         setAlert({ type: "error", text: res?.error || "Error en la conversión." });
       }
+    }
+  };
+
+  const handleUrlConvert = async () => {
+    if (!canOperate()) { limitGate.setOpen(true); return; }
+    const trimmed = urlInput.trim();
+    if (!trimmed) { setUrlError("Ingresa una URL válida."); return; }
+    if (!/^https?:\/\//i.test(trimmed)) { setUrlError("La URL debe comenzar con http:// o https://"); return; }
+    setUrlError("");
+    setIsLoading(true);
+    setAlert(null);
+    setResultFile(null);
+    setShareUrl(null);
+    const res = await convertUrl(trimmed, urlFmt);
+    setIsLoading(false);
+    if (res?.output_file) {
+      incrementOps();
+      setResultFile(res.output_file);
+      setFriendlyName(res.friendly_name ?? null);
+      const fmtDef = URL_FORMATS.find((f) => f.fmt === urlFmt);
+      setAlert({ type: "success", text: `¡Conversión a ${fmtDef?.label ?? urlFmt.toUpperCase()} exitosa!` });
+      addActivity({ type: "convert", filename: trimmed, format: fmtDef?.label ?? urlFmt.toUpperCase() });
+    } else {
+      setAlert({ type: "error", text: res?.error || "Error al convertir la URL." });
     }
   };
 
@@ -228,20 +307,44 @@ export default function ConverterPage() {
         {/* Daily usage */}
         <DailyUsageBanner />
 
+        {/* Mode selector: File vs URL */}
+        <div className="flex gap-2 bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm p-1.5">
+          <button
+            type="button"
+            onClick={() => { setIsUrlMode(false); setResultFile(null); setAlert(null); setShareUrl(null); }}
+            className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-bold transition-all ${
+              !isUrlMode ? "bg-emerald-500 text-white shadow-sm" : "text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800"
+            }`}
+          >
+            📂 Desde archivo
+          </button>
+          <button
+            type="button"
+            onClick={() => { setIsUrlMode(true); setFile(null); setResultFile(null); setAlert(null); setShareUrl(null); }}
+            className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-bold transition-all ${
+              isUrlMode ? "bg-blue-500 text-white shadow-sm" : "text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800"
+            }`}
+          >
+            🔗 Desde URL
+          </button>
+        </div>
+
         {/* Batch toggle */}
         <div className="flex items-center justify-between bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm px-5 py-3">
           <div>
             <p className="text-sm font-bold text-gray-800 dark:text-gray-200">Modo lote</p>
             <p className="text-xs text-gray-400 dark:text-gray-500">Convierte múltiples archivos a la vez</p>
           </div>
-          {canUse("batch") ? (
+          {!mounted ? (
+            <div className="w-12 h-6 bg-gray-200 dark:bg-gray-800 rounded-full animate-pulse" />
+          ) : canUse("batch") ? (
             <button
               type="button"
-              onClick={() => { setIsBatch((b) => !b); setFile(null); setFiles([]); setResultFile(null); setBatchResults([]); }}
+              onClick={() => { setIsBatch((b) => !b); setFile(null); setFiles([]); setResultFile(null); setBatchResults([]); setBatchFileExt(""); setSelectedFmt(""); }}
               title={isBatch ? "Desactivar modo lote" : "Activar modo lote"}
               className={`relative w-12 h-6 rounded-full transition-colors ${isBatch ? "bg-emerald-500" : "bg-gray-200 dark:bg-gray-700"}`}
             >
-              <span className={`absolute top-1 w-4 h-4 bg-white rounded-full shadow transition-transform ${isBatch ? "translate-x-7" : "translate-x-1"}`} />
+              <span className={`absolute top-1 left-1 w-4 h-4 bg-white rounded-full shadow transition-transform ${isBatch ? "translate-x-6" : "translate-x-0"}`} />
             </button>
           ) : (
             <button type="button" onClick={() => batchGate.setOpen(true)}
@@ -267,8 +370,79 @@ export default function ConverterPage() {
           </div>
         </div>
 
+        {/* URL input zone */}
+        {isUrlMode && (
+          <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm p-6 space-y-5">
+            <div>
+              <label className="block text-sm font-bold text-gray-700 dark:text-gray-300 mb-2">
+                🔗 Ingresa el enlace de la página web
+              </label>
+              <div className="flex gap-2">
+                <input
+                  type="url"
+                  value={urlInput}
+                  onChange={(e) => { setUrlInput(e.target.value); setUrlError(""); }}
+                  onKeyDown={(e) => e.key === "Enter" && handleUrlConvert()}
+                  placeholder="https://ejemplo.com/pagina"
+                  className={`flex-1 px-4 py-3 rounded-xl border text-sm bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-400 focus:outline-none focus:ring-2 transition-all ${
+                    urlError ? "border-red-400 focus:ring-red-300" : "border-gray-200 dark:border-gray-700 focus:ring-blue-300 focus:border-blue-400"
+                  }`}
+                />
+                {urlInput && (
+                  <button type="button" onClick={() => { setUrlInput(""); setUrlError(""); }}
+                    className="px-3 text-gray-400 hover:text-red-500 transition-colors"
+                  >✕</button>
+                )}
+              </div>
+              {urlError && <p className="text-xs text-red-500 mt-1.5">{urlError}</p>}
+              <p className="text-xs text-gray-400 dark:text-gray-500 mt-1.5">
+                La página será capturada tal como aparece en el navegador
+              </p>
+            </div>
+
+            {/* URL format selector */}
+            <div>
+              <p className="text-xs font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wide mb-3">
+                Convertir a:
+              </p>
+              <div className="grid grid-cols-3 sm:grid-cols-5 gap-2">
+                {URL_FORMATS.map((f) => (
+                  <button key={f.fmt} type="button" onClick={() => setUrlFmt(f.fmt)}
+                    className={`flex flex-col items-center p-3 rounded-xl border-2 transition-all text-center ${
+                      urlFmt === f.fmt
+                        ? f.card + " shadow-sm scale-[1.04]"
+                        : "border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-500 dark:text-gray-400 hover:border-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 hover:shadow-sm"
+                    }`}
+                  >
+                    <span className="text-xl mb-1">{f.icon}</span>
+                    <span className="font-bold text-xs">{f.label}</span>
+                    <span className="text-xs mt-0.5 opacity-60 leading-tight">{f.description}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* URL → Format visual indicator */}
+            <div className="flex items-center gap-3">
+              <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl border border-blue-200 bg-blue-50 text-blue-700 text-sm font-bold">
+                🌐 URL
+              </div>
+              <div className="flex-1 flex items-center gap-2 text-gray-300">
+                <div className="flex-1 h-px bg-gradient-to-r from-blue-200 to-blue-400" />
+                <span className="text-xl">→</span>
+                <div className="flex-1 h-px bg-gradient-to-r from-blue-400 to-blue-200" />
+              </div>
+              {(() => { const f = URL_FORMATS.find((x) => x.fmt === urlFmt)!; return (
+                <div className={`flex items-center gap-2 px-3 py-1.5 rounded-xl border text-sm font-bold ${f.card}`}>
+                  {f.icon} {f.label}
+                </div>
+              ); })()}
+            </div>
+          </div>
+        )}
+
         {/* Upload zone */}
-        <div
+        {!isUrlMode && !isBatch && <div
           onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
           onDragLeave={() => setIsDragging(false)}
           onDrop={handleDrop}
@@ -311,15 +485,67 @@ export default function ConverterPage() {
               <p className="text-xs text-gray-300 dark:text-gray-600 mt-3">o haz clic para seleccionar</p>
             </>
           )}
-        </div>
+        </div>}
+
+        {/* Batch upload zone */}
+        {!isUrlMode && isBatch && (
+          <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm p-6 space-y-4">
+            <div
+              onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
+              onDragLeave={() => setIsDragging(false)}
+              onDrop={handleDrop}
+              onClick={() => batchInputRef.current?.click()}
+              className={`border-2 border-dashed rounded-xl p-8 text-center cursor-pointer transition-all ${
+                isDragging
+                  ? "border-emerald-400 bg-emerald-50 dark:bg-emerald-900/20 scale-[1.01]"
+                  : "border-gray-300 dark:border-gray-600 hover:border-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/10"
+              }`}
+            >
+              <input
+                ref={batchInputRef}
+                type="file"
+                multiple
+                accept={ACCEPTED_EXTS}
+                aria-label="Seleccionar archivos en lote"
+                className="hidden"
+                onChange={(e) => { const ff = Array.from(e.target.files ?? []); if (ff.length > 0) handleBatchFileSelect(ff); e.target.value = ""; }}
+              />
+              <div className="text-4xl mb-2">📂</div>
+              <p className="font-bold text-gray-700 dark:text-gray-200">Arrastra múltiples archivos aquí</p>
+              <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">o haz clic para seleccionar varios</p>
+            </div>
+            {files.length > 0 && (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <p className="text-sm font-bold text-gray-700 dark:text-gray-300">{files.length} archivo{files.length !== 1 ? "s" : ""} cargado{files.length !== 1 ? "s" : ""}:</p>
+                  <button type="button" onClick={() => { setFiles([]); setBatchFileExt(""); setSelectedFmt(""); setResultFile(null); }} className="text-xs text-red-500 hover:text-red-700 font-medium">Limpiar todo</button>
+                </div>
+                <div className="max-h-40 overflow-y-auto space-y-1">
+                  {files.map((f, i) => {
+                    const ext = getExt(f.name);
+                    const info = INPUT_INFO[ext];
+                    return (
+                      <div key={i} className="flex items-center gap-3 p-2 bg-gray-50 dark:bg-gray-800 rounded-lg text-sm">
+                        <span>{info?.icon ?? "📄"}</span>
+                        <span className="flex-1 truncate text-gray-700 dark:text-gray-300">{f.name}</span>
+                        <span className="text-xs text-gray-400">{(f.size / 1024).toFixed(1)} KB</span>
+                        <button type="button" onClick={() => { const updated = files.filter((_, idx) => idx !== i); setFiles(updated); if (updated.length === 0) { setBatchFileExt(""); setSelectedFmt(""); } }} className="text-red-400 hover:text-red-600 text-xs font-bold">✕</button>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Format selector */}
-        {file && available.length > 0 && (
+        {!isUrlMode && ((!isBatch && file && available.length > 0) || (isBatch && files.length > 0 && batchAvailable.length > 0)) && (
           <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm p-6">
             {/* From → To visual */}
             <div className="flex items-center gap-3 mb-5">
-              <div className={`flex items-center gap-2 px-3 py-1.5 rounded-xl border text-sm font-bold ${inputInfo?.color ?? ""}`}>
-                {inputInfo?.icon} {inputInfo?.label ?? fileExt.toUpperCase()}
+              <div className={`flex items-center gap-2 px-3 py-1.5 rounded-xl border text-sm font-bold ${(isBatch ? batchInputInfo : inputInfo)?.color ?? ""}`}>
+                {(isBatch ? batchInputInfo : inputInfo)?.icon} {(isBatch ? batchInputInfo?.label ?? batchFileExt.toUpperCase() : inputInfo?.label ?? fileExt.toUpperCase())}
               </div>
               <div className="flex-1 flex items-center gap-2 text-gray-300">
                 <div className="flex-1 h-px bg-gradient-to-r from-gray-200 to-emerald-300" />
@@ -334,12 +560,12 @@ export default function ConverterPage() {
             </div>
 
             <p className="text-xs text-gray-400 dark:text-gray-500 font-bold uppercase tracking-wide mb-3">
-              Convertir a: <span className="text-emerald-600">{available.length} opciones</span>
+              Convertir a: <span className="text-emerald-600">{(isBatch ? batchAvailable : available).length} opciones</span>
             </p>
 
             {/* Grid — auto-wraps to fill, max ~5 per row */}
-            <div className="grid gap-2 grid-cols-4 sm:grid-cols-5 md:grid-cols-6 lg:grid-cols-7">
-              {available.map((fmt) => {
+            <div className="grid gap-2 grid-cols-3 sm:grid-cols-5 md:grid-cols-6 lg:grid-cols-7">
+              {(isBatch ? batchAvailable : available).map((fmt) => {
                 const f = OUTPUT_FORMATS[fmt];
                 if (!f) return null;
                 const isSelected = selectedFmt === fmt;
@@ -361,6 +587,29 @@ export default function ConverterPage() {
           </div>
         )}
 
+        {/* Batch progress bar */}
+
+        {batchProgress && (
+          <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm p-4">
+            <div className="flex items-center justify-between mb-2 text-sm font-medium text-gray-700 dark:text-gray-300">
+              <span>Convirtiendo archivos...</span>
+              <span className="text-emerald-600 font-bold">{batchProgress.done} / {batchProgress.total}</span>
+            </div>
+            <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2.5 overflow-hidden">
+              <div
+                className="h-2.5 bg-gradient-to-r from-emerald-500 to-teal-400 rounded-full transition-all duration-300 [width:var(--progress)]"
+                // @ts-expect-error CSS custom property
+                style={{ "--progress": `${(batchProgress.done / batchProgress.total) * 100}%` }}
+              />
+            </div>
+            <p className="text-xs text-gray-400 mt-1.5">
+              {batchProgress.done < batchProgress.total
+                ? `Procesando archivo ${batchProgress.done + 1}...`
+                : "Finalizando..."}
+            </p>
+          </div>
+        )}
+
         {/* Alert */}
         {alert && (
           <div className={`p-3 rounded-xl text-sm font-medium border ${
@@ -373,33 +622,58 @@ export default function ConverterPage() {
         )}
 
         {/* Action bar */}
-        <div className="flex gap-3">
-          <button type="button" onClick={handleConvert}
-            disabled={!file || !selectedFmt || isLoading}
-            className={`flex-1 py-4 rounded-2xl font-bold text-white text-base transition-all shadow-md ${
-              !file || !selectedFmt || isLoading
-                ? "bg-gray-300 cursor-not-allowed"
-                : (selectedDef?.btn ?? "bg-gray-600 hover:bg-gray-700")
-            }`}
-          >
-            {isLoading ? (
-              <span className="flex items-center justify-center gap-2">
-                <svg className="animate-spin h-5 w-5" viewBox="0 0 24 24" fill="none">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/>
-                </svg>
-                Convirtiendo a {selectedDef?.ext ?? selectedFmt.toUpperCase()}...
-              </span>
-            ) : selectedFmt ? (
-              `${selectedDef?.icon ?? "🔄"}  Convertir a ${selectedDef?.ext ?? selectedFmt.toUpperCase()}`
-            ) : (
-              "Selecciona un formato de salida"
-            )}
-          </button>
+        <div className="flex flex-wrap gap-3">
+          {isUrlMode ? (
+            <button type="button" onClick={handleUrlConvert}
+              disabled={!urlInput.trim() || isLoading}
+              className={`flex-1 py-4 rounded-2xl font-bold text-white text-base transition-all shadow-md ${
+                !urlInput.trim() || isLoading
+                  ? "bg-gray-300 cursor-not-allowed"
+                  : (URL_FORMATS.find((f) => f.fmt === urlFmt)?.btn ?? "bg-blue-600 hover:bg-blue-700")
+              }`}
+            >
+              {isLoading ? (
+                <span className="flex items-center justify-center gap-2">
+                  <svg className="animate-spin h-5 w-5" viewBox="0 0 24 24" fill="none">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/>
+                  </svg>
+                  Convirtiendo URL a {urlFmt.toUpperCase()}...
+                </span>
+              ) : (
+                `${URL_FORMATS.find((f) => f.fmt === urlFmt)?.icon ?? "🔗"}  Convertir URL a ${urlFmt.toUpperCase()}`
+              )}
+            </button>
+          ) : (
+            <button type="button" onClick={handleConvert}
+              disabled={(isBatch ? files.length === 0 : !file) || !selectedFmt || isLoading}
+              className={`flex-1 py-4 rounded-2xl font-bold text-white text-base transition-all shadow-md ${
+                (isBatch ? files.length === 0 : !file) || !selectedFmt || isLoading
+                  ? "bg-gray-300 cursor-not-allowed"
+                  : (selectedDef?.btn ?? "bg-gray-600 hover:bg-gray-700")
+              }`}
+            >
+              {isLoading ? (
+                <span className="flex items-center justify-center gap-2">
+                  <svg className="animate-spin h-5 w-5" viewBox="0 0 24 24" fill="none">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/>
+                  </svg>
+                  {isBatch && batchProgress ? `Convirtiendo ${batchProgress.done + 1}/${batchProgress.total}...` : `Convirtiendo a ${selectedDef?.ext ?? selectedFmt.toUpperCase()}...`}
+                </span>
+              ) : selectedFmt ? (
+                isBatch
+                  ? `${selectedDef?.icon ?? "🔄"}  Convertir ${files.length} archivo${files.length !== 1 ? "s" : ""} a ${selectedDef?.ext ?? selectedFmt.toUpperCase()}`
+                  : `${selectedDef?.icon ?? "🔄"}  Convertir a ${selectedDef?.ext ?? selectedFmt.toUpperCase()}`
+              ) : (
+                "Selecciona un formato de salida"
+              )}
+            </button>
+          )}
 
           {resultFile && (
             <>
-              <a href={`${API_URL}/download/${resultFile}`} download
+              <a href={`${API_URL}/download/${resultFile}${friendlyName ? `?name=${encodeURIComponent(friendlyName)}` : ""}`} download={friendlyName ?? resultFile ?? undefined}
                 className="flex items-center gap-2 px-6 py-4 bg-gradient-to-br from-gray-800 to-gray-900 hover:from-gray-700 hover:to-gray-800 text-white rounded-2xl font-bold transition-all shadow-md whitespace-nowrap"
               >
                 ⬇ Descargar
@@ -408,7 +682,7 @@ export default function ConverterPage() {
                 className="flex items-center gap-2 px-5 py-4 bg-blue-600 hover:bg-blue-700 text-white rounded-2xl font-bold transition-all shadow-md whitespace-nowrap"
                 title="Copiar enlace para compartir"
               >
-                {isCopied ? "✅ Copiado" : canUse("share") ? "🔗 Compartir" : "👑 Compartir"}
+                {isCopied ? "✅ Copiado" : (!mounted || !canUse("share")) ? "👑 Compartir" : "🔗 Compartir"}
               </button>
             </>
           )}
@@ -421,10 +695,9 @@ export default function ConverterPage() {
         )}
 
         {/* Preview */}
-        {resultFile && ["jpg","jpeg","png","webp","bmp","gif","tiff","ico"].includes(selectedFmt) && (
+        {resultFile && ["jpg","jpeg","png","webp","bmp","gif","tiff","ico"].includes(isUrlMode ? urlFmt : selectedFmt) && (
           <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm p-4">
             <p className="text-xs font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-3">Vista previa</p>
-            {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               src={`${API_URL}/download/${resultFile}`}
               alt="Vista previa del resultado"

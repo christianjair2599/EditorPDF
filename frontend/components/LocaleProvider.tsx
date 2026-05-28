@@ -3,7 +3,7 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from "react";
 import {
   type Locale, type T,
-  translations, detectLocale, getCurrency, formatPrice,
+  translations, detectLocale, detectGeoInfo, formatPrice,
 } from "../lib/i18n";
 
 interface LocaleContextValue {
@@ -13,6 +13,7 @@ interface LocaleContextValue {
   currency: string;
   /** Format a USD amount in the user's detected currency (same amount, local symbol) */
   price: (amount: number) => string;
+  setGeoOverride: (geo: { currency: string; browserLocale: string } | null) => void;
 }
 
 const LocaleContext = createContext<LocaleContextValue | null>(null);
@@ -30,9 +31,21 @@ export function LocaleProvider({ children }: { children: ReactNode }) {
     const resolved: Locale = saved ?? detected;
     setLocaleState(resolved);
 
-    const bl = navigator.language;
-    setBrowserLocale(bl);
-    setCurrency(getCurrency(bl));
+    const override = localStorage.getItem("docuflow_test_geo");
+    if (override) {
+      try {
+        const parsed = JSON.parse(override);
+        setBrowserLocale(parsed.browserLocale);
+        setCurrency(parsed.currency);
+        return;
+      } catch (e) {
+        // ignore
+      }
+    }
+
+    const geo = detectGeoInfo();
+    setBrowserLocale(geo.browserLocale);
+    setCurrency(geo.currency);
   }, []);
 
   const setLocale = (l: Locale) => {
@@ -40,10 +53,23 @@ export function LocaleProvider({ children }: { children: ReactNode }) {
     localStorage.setItem(STORAGE_KEY, l);
   };
 
+  const setGeoOverride = (geo: { currency: string; browserLocale: string } | null) => {
+    if (geo === null) {
+      localStorage.removeItem("docuflow_test_geo");
+      const originalGeo = detectGeoInfo();
+      setBrowserLocale(originalGeo.browserLocale);
+      setCurrency(originalGeo.currency);
+    } else {
+      localStorage.setItem("docuflow_test_geo", JSON.stringify(geo));
+      setBrowserLocale(geo.browserLocale);
+      setCurrency(geo.currency);
+    }
+  };
+
   const price = (amount: number) => formatPrice(amount, currency, browserLocale);
 
   return (
-    <LocaleContext.Provider value={{ locale, setLocale, t: translations[locale], currency, price }}>
+    <LocaleContext.Provider value={{ locale, setLocale, t: translations[locale], currency, price, setGeoOverride }}>
       {children}
     </LocaleContext.Provider>
   );

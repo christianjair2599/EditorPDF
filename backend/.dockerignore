@@ -1,7 +1,10 @@
-__pycache__/
+__pycache__
 *.pyc
 *.pyo
-uploads/
-*.db
-*.log
+*.pyd
 .env
+*.db
+uploads/
+backend.log
+backend_debug.log
+backend_new.log

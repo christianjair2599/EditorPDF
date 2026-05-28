@@ -35,14 +35,15 @@ export default function PricingPage() {
     }
   }, []);
 
-  const handleCheckout = async () => {
+  const handleCheckout = async (provider: "lemon" | "stripe" = "lemon") => {
     if (!session?.user?.email) {
       signIn("google", { callbackUrl: "/pricing" });
       return;
     }
     setCheckoutLoading(true);
     try {
-      const res = await fetch("/api/checkout", {
+      const endpoint = provider === "lemon" ? "/api/lemon-checkout" : "/api/checkout";
+      const res = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email: session.user.email }),
@@ -142,7 +143,7 @@ export default function PricingPage() {
             <div className="mb-6">
               <p className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-2">{p.freeTier}</p>
               <div className="flex items-end gap-2">
-                <span className="text-5xl font-black text-gray-900 dark:text-white">$0</span>
+                <span className="text-5xl font-black text-gray-900 dark:text-white">{price(0)}</span>
                 <span className="text-gray-400 mb-2">{p.perMonth}</span>
               </div>
               <p className="text-sm text-gray-500 dark:text-gray-400 mt-2">{p.freeDesc}</p>
@@ -192,18 +193,31 @@ export default function PricingPage() {
                 ✓ Plan activo
               </div>
             ) : (
-              <button
-                type="button"
-                onClick={handleCheckout}
-                disabled={checkoutLoading || (mounted && loading)}
-                className="w-full py-3 text-center rounded-2xl bg-gradient-to-r from-yellow-400 to-orange-500 hover:from-yellow-500 hover:to-orange-600 text-white font-black text-sm shadow-lg shadow-orange-900/30 hover:scale-[1.02] transition-all mb-8 disabled:opacity-60 disabled:cursor-not-allowed disabled:hover:scale-100"
-              >
-                {checkoutLoading
-                  ? "Redirigiendo..."
-                  : !session
-                  ? "Iniciar sesión para suscribirse"
-                  : p.premiumCta}
-              </button>
+              <div className="space-y-2 mb-8">
+                {/* Lemon Squeezy — tarjetas internacionales, PayPal, Apple Pay */}
+                <button
+                  type="button"
+                  onClick={() => handleCheckout("lemon")}
+                  disabled={checkoutLoading || (mounted && loading)}
+                  className="w-full py-3 text-center rounded-2xl bg-gradient-to-r from-yellow-400 to-orange-500 hover:from-yellow-500 hover:to-orange-600 text-white font-black text-sm shadow-lg shadow-orange-900/30 hover:scale-[1.02] transition-all disabled:opacity-60 disabled:cursor-not-allowed disabled:hover:scale-100"
+                >
+                  {checkoutLoading
+                    ? "Redirigiendo..."
+                    : !session
+                    ? "Iniciar sesión para suscribirse"
+                    : "💳 Pagar con tarjeta / PayPal"}
+                </button>
+                {/* Payment methods badge */}
+                {session && (
+                  <div className="flex items-center justify-center gap-2 py-1.5">
+                    <span className="text-xs text-gray-500">Acepta:</span>
+                    <span className="text-xs bg-gray-800 text-gray-300 px-2 py-0.5 rounded-full">Visa</span>
+                    <span className="text-xs bg-gray-800 text-gray-300 px-2 py-0.5 rounded-full">Mastercard</span>
+                    <span className="text-xs bg-blue-900 text-blue-300 px-2 py-0.5 rounded-full">PayPal</span>
+                    <span className="text-xs bg-gray-900 text-gray-300 px-2 py-0.5 rounded-full">Apple Pay</span>
+                  </div>
+                )}
+              </div>
             )}
 
             <ul className="space-y-3">
@@ -276,7 +290,7 @@ export default function PricingPage() {
           {!isPremium && (
             <button
               type="button"
-              onClick={handleCheckout}
+              onClick={() => handleCheckout("lemon")}
               disabled={checkoutLoading}
               className="px-8 py-4 bg-gradient-to-r from-yellow-400 to-orange-500 hover:from-yellow-500 hover:to-orange-600 text-white font-black rounded-2xl text-lg shadow-2xl shadow-orange-900/40 hover:scale-105 transition-all relative disabled:opacity-60"
             >

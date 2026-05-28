@@ -28,19 +28,129 @@ const LANG_CURRENCY: Record<string, string> = {
   pl: "PLN", ar: "USD",
 };
 
+const TIMEZONE_GEO: Record<string, { currency: string; locale: string }> = {
+  "lima": { currency: "PEN", locale: "es-PE" },
+  "bogota": { currency: "COP", locale: "es-CO" },
+  "mexico": { currency: "MXN", locale: "es-MX" },
+  "buenos_aires": { currency: "ARS", locale: "es-AR" },
+  "santiago": { currency: "CLP", locale: "es-CL" },
+  "caracas": { currency: "VES", locale: "es-VE" },
+  "montevideo": { currency: "UYU", locale: "es-UY" },
+  "quito": { currency: "USD", locale: "es-EC" },
+  "guayaquil": { currency: "USD", locale: "es-EC" },
+  "asuncion": { currency: "PYG", locale: "es-PY" },
+  "lapaz": { currency: "BOB", locale: "es-BO" },
+  "la_paz": { currency: "BOB", locale: "es-BO" },
+  "san_jose": { currency: "CRC", locale: "es-CR" },
+  "sanjose": { currency: "CRC", locale: "es-CR" },
+  "tegucigalpa": { currency: "HNL", locale: "es-HN" },
+  "managua": { currency: "NIO", locale: "es-NI" },
+  "panama": { currency: "USD", locale: "es-PA" },
+  "santo_domingo": { currency: "DOP", locale: "es-DO" },
+  "santodomingo": { currency: "DOP", locale: "es-DO" },
+  "havana": { currency: "CUP", locale: "es-CU" },
+  "la_habana": { currency: "CUP", locale: "es-CU" },
+  "puerto_rico": { currency: "USD", locale: "es-PR" },
+  "sao_paulo": { currency: "BRL", locale: "pt-BR" },
+  "saopaulo": { currency: "BRL", locale: "pt-BR" },
+  "rio_de_janeiro": { currency: "BRL", locale: "pt-BR" },
+  "madrid": { currency: "EUR", locale: "es-ES" },
+};
+
+export interface GeoInfo {
+  currency: string;
+  browserLocale: string;
+}
+
+export function detectGeoInfo(): GeoInfo {
+  if (typeof window === "undefined" || typeof Intl === "undefined") {
+    return { currency: "USD", browserLocale: "en-US" };
+  }
+
+  try {
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone?.toLowerCase() ?? "";
+    for (const key of Object.keys(TIMEZONE_GEO)) {
+      if (tz.includes(key)) {
+        return {
+          currency: TIMEZONE_GEO[key].currency,
+          browserLocale: TIMEZONE_GEO[key].locale
+        };
+      }
+    }
+  } catch (e) {
+    // ignore
+  }
+
+  // Fallback to browser language locale
+  const lang = typeof navigator !== "undefined" ? navigator.language : "en-US";
+  const currency = LOCALE_CURRENCY[lang] ?? LANG_CURRENCY[lang.split("-")[0]] ?? "USD";
+  return { currency, browserLocale: lang };
+}
+
 export function getCurrency(browserLocale?: string): string {
   const loc = browserLocale ?? (typeof navigator !== "undefined" ? navigator.language : "en-US");
   return LOCALE_CURRENCY[loc] ?? LANG_CURRENCY[loc.split("-")[0]] ?? "USD";
 }
 
+const CURRENCY_RATES: Record<string, number> = {
+  USD: 1.0,
+  EUR: 0.92,
+  PEN: 3.73,
+  MXN: 17.10,
+  COP: 3900.0,
+  ARS: 890.0,
+  CLP: 940.0,
+  VES: 36.30,
+  UYU: 38.50,
+  PYG: 7300.0,
+  BOB: 6.90,
+  CRC: 515.0,
+  HNL: 24.60,
+  NIO: 36.70,
+  DOP: 58.50,
+  CUP: 24.00,
+  BRL: 5.10,
+  GBP: 0.79,
+  CAD: 1.37,
+  AUD: 1.52,
+  NZD: 1.63,
+  INR: 83.30,
+  ZAR: 18.70,
+  SGD: 1.35,
+  CHF: 0.90,
+  PLN: 3.95,
+  RUB: 91.50,
+  JPY: 155.0,
+  KRW: 1360.0,
+  CNY: 7.23,
+  TWD: 32.30,
+  HKD: 7.80,
+  TRY: 32.20,
+  SEK: 10.70,
+  NOK: 10.80,
+  DKK: 6.85,
+};
+
 export function formatPrice(amount: number, currency: string, browserLocale?: string): string {
   const loc = browserLocale ?? (typeof navigator !== "undefined" ? navigator.language : "en-US");
+  
+  // Convert price from USD base
+  const rate = CURRENCY_RATES[currency] ?? 1.0;
+  const converted = amount * rate;
+  
+  // Apply pretty rounding based on scale
+  let prettyAmount = Math.round(converted);
+  if (prettyAmount >= 1000) {
+    // Round to nearest 100 for large numbers (like COP, CLP, KRW)
+    prettyAmount = Math.round(prettyAmount / 100) * 100;
+  }
+
   return new Intl.NumberFormat(loc, {
     style: "currency",
     currency,
     minimumFractionDigits: 0,
     maximumFractionDigits: 0,
-  }).format(amount);
+  }).format(prettyAmount);
 }
 
 // ─── Language detection ───────────────────────────────────────────────────────
@@ -106,6 +216,17 @@ export interface T {
     faqTitle: string;
     faq: { q: string; a: string }[];
     navLink: string;
+  };
+  footer: {
+    terms: string; privacy: string; legal: string; support: string;
+    rights: string; status: string;
+    colTools: string; colCompany: string; colLegal: string;
+  };
+  cookies: {
+    message: string;
+    accept: string;
+    decline: string;
+    learnMore: string;
   };
 }
 
@@ -240,6 +361,23 @@ const es: T = {
     ],
     navLink: "Soporte",
   },
+  footer: {
+    terms: "Términos y Condiciones",
+    privacy: "Privacidad de Datos",
+    legal: "Aviso Legal",
+    support: "Soporte",
+    rights: "© 2025 DocuFlow · Todos los derechos reservados",
+    status: "Todos los sistemas operativos",
+    colTools: "Herramientas",
+    colCompany: "Empresa",
+    colLegal: "Legal",
+  },
+  cookies: {
+    message: "Usamos cookies propias y de terceros para mejorar tu experiencia, analizar el tráfico y personalizar el contenido. Puedes aceptar todas las cookies o gestionar tus preferencias.",
+    accept: "Aceptar todas",
+    decline: "Solo esenciales",
+    learnMore: "Más información",
+  },
 };
 
 // ─── English ──────────────────────────────────────────────────────────────────
@@ -372,6 +510,23 @@ const en: T = {
       { q: "I can't log in / forgot my password", a: "DocuFlow uses Google as the identity provider. Use the same Google account you signed up with." },
     ],
     navLink: "Support",
+  },
+  footer: {
+    terms: "Terms & Conditions",
+    privacy: "Data Privacy",
+    legal: "Legal Notice",
+    support: "Support",
+    rights: "© 2025 DocuFlow · All rights reserved",
+    status: "All systems operational",
+    colTools: "Tools",
+    colCompany: "Company",
+    colLegal: "Legal",
+  },
+  cookies: {
+    message: "We use first-party and third-party cookies to improve your experience, analyze traffic, and personalize content. You can accept all cookies or manage your preferences.",
+    accept: "Accept all",
+    decline: "Essential only",
+    learnMore: "Learn more",
   },
 };
 

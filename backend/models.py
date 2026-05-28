@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime
+from sqlalchemy import Column, Integer, String, DateTime, Boolean
 from database import Base
 import datetime
 
@@ -9,6 +9,9 @@ class User(Base):
     email = Column(String, unique=True, index=True)
     password = Column(String)
     usage_count = Column(Integer, default=0)
+    is_admin = Column(Boolean, default=False)
+    is_tester = Column(Boolean, default=False)
+
 
 
 class Subscription(Base):

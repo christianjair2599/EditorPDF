@@ -1,4 +1,4 @@
-from fastapi import FastAPI, File, UploadFile, Form, Request, Header
+from fastapi import FastAPI, File, UploadFile, Form, Request, Header, Depends, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 import shutil, os, uuid, json, csv, re, time, hmac, hashlib
@@ -49,8 +49,8 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["GET", "POST", "OPTIONS"],
-    allow_headers=["Content-Type", "Authorization"],
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 UPLOAD_DIR = "uploads"
@@ -197,20 +197,52 @@ def pdf_to_image_list(input_file: str) -> list:
     doc.close()
     return imgs
 
+async def verify_premium_user(
+    x_user_email: str = Header(None, alias="X-User-Email")
+):
+    db = SessionLocal()
+    try:
+        if not x_user_email:
+            raise HTTPException(status_code=402, detail="Acceso Premium requerido. Por favor, inicia sesión.")
+        
+        # Check tester status first (QA / simulator)
+        from models import User
+        user = db.query(User).filter(User.email == x_user_email).first()
+        if user and user.is_tester:
+            return x_user_email
+            
+        # Check active subscription
+        from models import Subscription
+        sub = db.query(Subscription).filter(Subscription.email == x_user_email).first()
+        is_premium = sub and sub.status == "active" and (
+            sub.current_period_end is None or sub.current_period_end > datetime.datetime.utcnow()
+        )
+        if not is_premium:
+            raise HTTPException(status_code=402, detail="Suscripción Premium requerida.")
+    finally:
+        db.close()
+    return x_user_email
 
-# ── Routes ────────────────────────────────────────────────────────────────────
+def remove_file(path: str):
+    try:
+        if os.path.exists(path):
+            os.remove(path)
+    except Exception as e:
+        print(f"Error removing temp file {path}: {e}")
 
 @app.get("/download/{filename}")
-async def download_file(filename: str, name: str = ""):
+async def download_file(filename: str, background_tasks: BackgroundTasks, name: str = ""):
     safe = os.path.basename(filename)
     path = os.path.join(UPLOAD_DIR, safe)
     if not os.path.exists(path):
         return {"error": "Archivo no encontrado"}
     download_name = os.path.basename(name) if name else safe
+    background_tasks.add_task(remove_file, path)
     return FileResponse(path, filename=download_name)
 
 
 @app.post("/upload/")
+
 async def upload_pdf(file: UploadFile = File(...)):
     cleanup_old_files()
     file_id = str(uuid.uuid4())
@@ -221,7 +253,11 @@ async def upload_pdf(file: UploadFile = File(...)):
 
 
 @app.post("/convert-any/")
-async def convert_any(file: UploadFile = File(...), output_format: str = Form(...)):
+async def convert_any(
+    file: UploadFile = File(...),
+    output_format: str = Form(...),
+    x_user_email: str = Header(None, alias="X-User-Email")
+):
     cleanup_old_files()
     file_id = str(uuid.uuid4())
     original_name = os.path.splitext(file.filename or "archivo")[0]
@@ -232,7 +268,32 @@ async def convert_any(file: UploadFile = File(...), output_format: str = Form(..
     with open(input_file, "wb") as buf:
         shutil.copyfileobj(file.file, buf)
 
+    # Validar tamaño del archivo en backend
+    file_size_mb = os.path.getsize(input_file) / (1024 * 1024)
+    db = SessionLocal()
+    is_premium = False
+    try:
+        if x_user_email:
+            from models import User, Subscription
+            user = db.query(User).filter(User.email == x_user_email).first()
+            is_tester = user and user.is_tester
+            sub = db.query(Subscription).filter(Subscription.email == x_user_email).first()
+            is_premium = is_tester or (sub and sub.status == "active" and (
+                sub.current_period_end is None or sub.current_period_end > datetime.datetime.utcnow()
+            ))
+    finally:
+        db.close()
+
+    max_allowed = 50 if is_premium else 5
+    if file_size_mb > max_allowed:
+        try:
+            os.remove(input_file)
+        except:
+            pass
+        return JSONResponse({"error": f"Límite de tamaño excedido ({max_allowed} MB). El plan gratuito tiene un límite de 5 MB."}, status_code=402)
+
     base = os.path.splitext(input_file)[0]
+
     fmt = output_format.lower()
     src = original_ext
     output_file = None
@@ -946,19 +1007,21 @@ async def edit_blocks(file_id: str = Form(...), edits: str = Form(...)):
                 align=0,
             )
         base, _ = os.path.splitext(input_file)
-        output_file = f"{base}_edited.pdf"
         doc.save(output_file)
         doc.close()
     except Exception as e:
         return {"error": f"Error al aplicar ediciones: {str(e)}"}
     return {"message": "Ediciones aplicadas", "output_file": os.path.basename(output_file)}
 
-
 @app.post("/improve-text/")
-async def improve_text(text: str = Form(...)):
+async def improve_text(
+    text: str = Form(...),
+    x_user_email: str = Depends(verify_premium_user)
+):
     api_key = os.getenv("ANTHROPIC_API_KEY")
     if not api_key:
         return {"error": "ANTHROPIC_API_KEY no configurada en el servidor."}
+
     try:
         import anthropic
         client = anthropic.Anthropic(api_key=api_key)
@@ -982,10 +1045,31 @@ async def improve_text(text: str = Form(...)):
 # ── PDF Utilities (Merge, Split, Compress) ────────────────────────────────
 
 @app.post("/merge-pdf/")
-async def merge_pdf(files: list[UploadFile] = File(...)):
+async def merge_pdf(
+    files: list[UploadFile] = File(...),
+    x_user_email: str = Header(None, alias="X-User-Email")
+):
     """Merge multiple PDF files into one."""
     if len(files) < 2:
         return {"error": "Se necesitan al menos 2 PDFs para fusionar."}
+
+    if len(files) > 2:
+        db = SessionLocal()
+        is_premium = False
+        try:
+            if x_user_email:
+                from models import User, Subscription
+                user = db.query(User).filter(User.email == x_user_email).first()
+                is_tester = user and user.is_tester
+                sub = db.query(Subscription).filter(Subscription.email == x_user_email).first()
+                is_premium = is_tester or (sub and sub.status == "active" and (
+                    sub.current_period_end is None or sub.current_period_end > datetime.datetime.utcnow()
+                ))
+        finally:
+            db.close()
+        if not is_premium:
+            return JSONResponse({"error": "El plan gratuito solo admite fusionar hasta 2 PDFs. Actualiza a Premium para fusionar ilimitados."}, status_code=402)
+
 
     try:
         temp_paths = []
@@ -1130,47 +1214,105 @@ async def compress_pdf(file: UploadFile = File(...), quality: int = Form(2)):
 
 
 @app.post("/ocr-pdf/")
-async def ocr_pdf(file: UploadFile = File(...)):
-    """Extract text from images or scanned PDFs using OCR (pytesseract)."""
+async def ocr_pdf(
+    file: UploadFile = File(...),
+    x_user_email: str = Depends(verify_premium_user)
+):
+    """Extract text from images or scanned PDFs using a serverless-friendly hybrid OCR system (local text extract + OCR.space API fallback)."""
+    import requests
+    temp_path = os.path.join(UPLOAD_DIR, f"{uuid.uuid4()}_{file.filename}")
     try:
-        import pytesseract
-
-        temp_path = os.path.join(UPLOAD_DIR, f"{uuid.uuid4()}_{file.filename}")
         content = await file.read()
         with open(temp_path, "wb") as f:
             f.write(content)
 
-        imgs = []
+        all_text = []
         fname = (file.filename or "").lower()
+
         if fname.endswith(".pdf"):
             doc = fitz.open(temp_path)
             for page_idx, page in enumerate(doc):
-                pix = page.get_pixmap(matrix=fitz.Matrix(2.0, 2.0))
-                img = PILImage.frombytes("RGB", [pix.width, pix.height], pix.samples)
-                imgs.append((page_idx + 1, img))
+                page_num = page_idx + 1
+                # 1. Intentar extracción de texto nativa del PDF
+                native_text = page.get_text().strip()
+                if len(native_text) > 30:
+                    all_text.append(f"--- PÁGINA {page_num} (Texto Extraído) ---\n{native_text}")
+                    continue
+
+                # 2. Si no hay texto nativo, renderizar la página y enviarla a OCR.space
+                try:
+                    pix = page.get_pixmap(matrix=fitz.Matrix(2.0, 2.0))
+                    page_img_path = os.path.join(UPLOAD_DIR, f"{uuid.uuid4()}_page_{page_num}.jpg")
+                    img = PILImage.frombytes("RGB", [pix.width, pix.height], pix.samples)
+                    img.save(page_img_path, "JPEG")
+
+                    # Consultar OCR.space
+                    api_key = os.getenv("OCR_SPACE_API_KEY", "helloworld")
+                    url = "https://api.ocr.space/parse/image"
+                    with open(page_img_path, "rb") as img_file:
+                        files = {"file": (os.path.basename(page_img_path), img_file, "image/jpeg")}
+                        payload = {
+                            "apikey": api_key,
+                            "language": "spa",
+                            "isOverlayRequired": False,
+                        }
+                        res = requests.post(url, files=files, data=payload, timeout=30)
+                        res.raise_for_status()
+                        data = res.json()
+
+                    if os.path.exists(page_img_path):
+                        os.remove(page_img_path)
+
+                    if data.get("IsErroredOnProcessing"):
+                        err_msg = data.get("ErrorMessage") or "Error de OCR en esta página"
+                        all_text.append(f"--- PÁGINA {page_num} ---\n[Error de OCR: {err_msg}]")
+                    else:
+                        parsed = data.get("ParsedResults", [])
+                        text = parsed[0].get("ParsedText", "").strip() if parsed else ""
+                        all_text.append(f"--- PÁGINA {page_num} (OCR Scanned) ---\n{text}")
+
+                except Exception as page_err:
+                    all_text.append(f"--- PÁGINA {page_num} ---\n[Error al procesar página: {str(page_err)}]")
             doc.close()
         else:
-            imgs.append((1, PILImage.open(temp_path)))
-
-        all_text = []
-        for page_num, img in imgs:
+            # Procesar imagen directa con OCR.space
             try:
-                text = pytesseract.image_to_string(img, lang="spa+eng")
-                all_text.append(f"--- PÁGINA {page_num} ---\n{text.strip()}")
-            except Exception as e:
-                all_text.append(f"--- PÁGINA {page_num} ---\nNo se pudo procesar: {e}")
+                api_key = os.getenv("OCR_SPACE_API_KEY", "helloworld")
+                url = "https://api.ocr.space/parse/image"
+                with open(temp_path, "rb") as img_file:
+                    files = {"file": (os.path.basename(temp_path), img_file)}
+                    payload = {
+                        "apikey": api_key,
+                        "language": "spa",
+                        "isOverlayRequired": False,
+                    }
+                    res = requests.post(url, files=files, data=payload, timeout=30)
+                    res.raise_for_status()
+                    data = res.json()
+
+                if data.get("IsErroredOnProcessing"):
+                    err_msg = data.get("ErrorMessage") or "Error de OCR"
+                    all_text.append(f"--- DOCUMENTO ---\n[Error de OCR: {err_msg}]")
+                else:
+                    parsed = data.get("ParsedResults", [])
+                    text = parsed[0].get("ParsedText", "").strip() if parsed else ""
+                    all_text.append(f"--- DOCUMENTO (OCR Extraído) ---\n{text}")
+            except Exception as img_err:
+                all_text.append(f"--- DOCUMENTO ---\n[Error en OCR: {str(img_err)}]")
 
         output_name = f"{uuid.uuid4()}_ocr.txt"
         output_path = os.path.join(UPLOAD_DIR, output_name)
         with open(output_path, "w", encoding="utf-8") as f:
             f.write("\n\n".join(all_text))
 
-        os.remove(temp_path)
         return {"message": "OCR completado", "output_file": output_name}
 
     except Exception as e:
         print(f"OCR error: {str(e)}")
-        return {"error": f"Error en OCR: {str(e)}"}
+        return {"error": f"Error en OCR general: {str(e)}"}
+    finally:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
 
 
 @app.post("/watermark-pdf/")
@@ -1180,7 +1322,9 @@ async def watermark_pdf(
     opacity: float = Form(0.3),
     font_size: int = Form(48),
     color: str = Form("#FF0000"),
+    x_user_email: str = Depends(verify_premium_user)
 ):
+
     """Add a diagonal text watermark to every page of a PDF."""
     if not file.filename.lower().endswith(".pdf"):
         return {"error": "Solo se aceptan archivos PDF."}
@@ -1228,7 +1372,11 @@ async def watermark_pdf(
 
 
 @app.post("/share/")
-async def share_file(file: UploadFile = File(...)):
+async def share_file(
+    file: UploadFile = File(...),
+    x_user_email: str = Depends(verify_premium_user)
+):
+
     """Store a file and return a shareable token."""
     try:
         token = str(uuid.uuid4())
@@ -1296,19 +1444,43 @@ async def create_checkout_session(request: Request):
 @app.get("/subscription-status")
 async def subscription_status(email: str):
     if not email:
-        return {"status": "free", "isPremium": False}
+        return {"status": "free", "isPremium": False, "isAdmin": False, "isTester": False}
     db = SessionLocal()
-    sub = get_or_create_subscription(db, email)
-    is_premium = sub.status == "active" and (
-        sub.current_period_end is None or sub.current_period_end > datetime.datetime.utcnow()
-    )
-    result = {
-        "status": sub.status,
-        "isPremium": is_premium,
-        "currentPeriodEnd": sub.current_period_end.isoformat() if sub.current_period_end else None,
-    }
-    db.close()
-    return result
+    try:
+        from models import User
+        user = db.query(User).filter(User.email == email).first()
+        if not user:
+            # Dynamically register the Google Auth user in the users table!
+            user = User(email=email, usage_count=0)
+            db.add(user)
+            db.commit()
+            db.refresh(user)
+        is_admin = user.is_admin if user else False
+        is_tester = user.is_tester if user else False
+
+        # If it's a tester, they get premium unlocked automatically
+        if user and user.is_tester:
+            return {
+                "status": "active",
+                "isPremium": True,
+                "currentPeriodEnd": None,
+                "isAdmin": is_admin,
+                "isTester": is_tester,
+            }
+
+        sub = get_or_create_subscription(db, email)
+        is_premium = sub.status == "active" and (
+            sub.current_period_end is None or sub.current_period_end > datetime.datetime.utcnow()
+        )
+        return {
+            "status": sub.status,
+            "isPremium": is_premium,
+            "currentPeriodEnd": sub.current_period_end.isoformat() if sub.current_period_end else None,
+            "isAdmin": is_admin,
+            "isTester": is_tester,
+        }
+    finally:
+        db.close()
 
 
 @app.post("/customer-portal")
@@ -1459,3 +1631,276 @@ async def lemon_webhook(request: Request, x_signature: str = Header(None, alias=
         db.close()
 
     return {"received": True}
+
+
+# ── Admin & QA Panel Endpoints ───────────────────────────────────────────────
+
+async def verify_admin_user(
+    x_user_email: str = Header(None, alias="X-User-Email")
+):
+    db = SessionLocal()
+    try:
+        if not x_user_email:
+            raise HTTPException(status_code=403, detail="Acceso denegado. Inicia sesión.")
+        from models import User
+        user = db.query(User).filter(User.email == x_user_email).first()
+        if not user or not user.is_admin:
+            raise HTTPException(status_code=403, detail="Acceso denegado. Requiere privilegios de administrador.")
+    finally:
+        db.close()
+    return x_user_email
+
+@app.get("/admin/stats")
+async def admin_stats(x_user_email: str = Depends(verify_admin_user)):
+    db = SessionLocal()
+    try:
+        from models import User, Subscription
+        from sqlalchemy import func
+
+        total_users = db.query(User).count()
+        premium_users = db.query(Subscription).filter(Subscription.status == "active").count()
+        
+        # System usage stats: sum of usage_count across all users
+        total_ops = db.query(func.sum(User.usage_count)).scalar() or 0
+        
+        # Calculate conversion rate
+        conversion_rate = round((premium_users / total_users * 100), 1) if total_users > 0 else 0.0
+        
+        # Estimated MRR (Monthly Recurring Revenue) - premium users * $9 USD
+        mrr = premium_users * 9
+
+        return {
+            "total_users": total_users,
+            "premium_users": premium_users,
+            "total_operations": total_ops,
+            "conversion_rate": conversion_rate,
+            "mrr": mrr,
+        }
+    finally:
+        db.close()
+
+@app.get("/admin/users")
+async def admin_users(
+    q: str = "",
+    x_user_email: str = Depends(verify_admin_user)
+):
+    db = SessionLocal()
+    try:
+        from models import User, Subscription
+        
+        # Query users, support search filter
+        query = db.query(User)
+        if q:
+            query = query.filter(User.email.contains(q))
+        users = query.order_by(User.id.desc()).limit(100).all()
+        
+        # Map user records with their subscription details
+        results = []
+        for u in users:
+            sub = db.query(Subscription).filter(Subscription.email == u.email).first()
+            results.append({
+                "id": u.id,
+                "email": u.email,
+                "usage_count": u.usage_count,
+                "is_admin": u.is_admin,
+                "is_tester": u.is_tester,
+                "premium_status": sub.status if sub else "free",
+                "current_period_end": sub.current_period_end.isoformat() if sub and sub.current_period_end else None
+            })
+        return results
+    finally:
+        db.close()
+
+@app.post("/admin/users/{user_id}/toggle-role")
+async def toggle_role(
+    user_id: int,
+    role: str = Form(...),  # "is_admin" | "is_tester"
+    x_user_email: str = Depends(verify_admin_user)
+):
+    db = SessionLocal()
+    try:
+        from models import User
+        user = db.query(User).filter(User.id == user_id).first()
+        if not user:
+            raise HTTPException(status_code=404, detail="Usuario no encontrado")
+            
+        # Protect against self-demotion
+        if user.email == x_user_email and role == "is_admin":
+            raise HTTPException(status_code=400, detail="No puedes quitarte el rol de administrador a ti mismo.")
+            
+        if role == "is_admin":
+            user.is_admin = not user.is_admin
+        elif role == "is_tester":
+            user.is_tester = not user.is_tester
+        else:
+            raise HTTPException(status_code=400, detail="Rol inválido")
+            
+        db.commit()
+        return {"success": True, "is_admin": user.is_admin, "is_tester": user.is_tester}
+    finally:
+        db.close()
+
+@app.post("/admin/users/{user_id}/set-premium")
+async def set_premium(
+    user_id: int,
+    status: str = Form(...),  # "active" | "free"
+    x_user_email: str = Depends(verify_admin_user)
+):
+    db = SessionLocal()
+    try:
+        from models import User, Subscription
+        user = db.query(User).filter(User.id == user_id).first()
+        if not user:
+            raise HTTPException(status_code=404, detail="Usuario no encontrado")
+            
+        sub = db.query(Subscription).filter(Subscription.email == user.email).first()
+        if not sub:
+            sub = Subscription(email=user.email, status="free")
+            db.add(sub)
+            db.commit()
+            db.refresh(sub)
+            
+        sub.status = status
+        if status == "active":
+            # Set period end to 1 year in the future for convenience
+            sub.current_period_end = datetime.datetime.utcnow() + datetime.timedelta(days=365)
+        else:
+            sub.current_period_end = None
+            
+        sub.updated_at = datetime.datetime.utcnow()
+        db.commit()
+        return {"success": True, "premium_status": sub.status}
+    finally:
+        db.close()
+
+# ── Tester Simulator Endpoints ───────────────────────────────────────────────
+
+async def verify_tester_user(
+    x_user_email: str = Header(None, alias="X-User-Email")
+):
+    db = SessionLocal()
+    try:
+        if not x_user_email:
+            raise HTTPException(status_code=403, detail="Acceso denegado. Inicia sesión.")
+        from models import User
+        user = db.query(User).filter(User.email == x_user_email).first()
+        if not user or not user.is_tester:
+            raise HTTPException(status_code=403, detail="Acceso denegado. Requiere perfil de tester de pruebas.")
+    finally:
+        db.close()
+    return x_user_email
+
+@app.post("/test/toggle-premium")
+async def test_toggle_premium(x_user_email: str = Depends(verify_tester_user)):
+    db = SessionLocal()
+    try:
+        from models import Subscription
+        sub = db.query(Subscription).filter(Subscription.email == x_user_email).first()
+        if not sub:
+            sub = Subscription(email=x_user_email, status="free")
+            db.add(sub)
+            db.commit()
+            db.refresh(sub)
+            
+        new_status = "active" if sub.status != "active" else "free"
+        sub.status = new_status
+        if new_status == "active":
+            sub.current_period_end = datetime.datetime.utcnow() + datetime.timedelta(days=30)
+        else:
+            sub.current_period_end = None
+            
+        sub.updated_at = datetime.datetime.utcnow()
+        db.commit()
+        return {"success": True, "premium_status": sub.status}
+    finally:
+        db.close()
+
+@app.post("/test/reset-limits")
+async def test_reset_limits(x_user_email: str = Depends(verify_tester_user)):
+    db = SessionLocal()
+    try:
+        from models import User
+        user = db.query(User).filter(User.email == x_user_email).first()
+        if user:
+            user.usage_count = 0
+            db.commit()
+            return {"success": True, "usage_count": 0}
+        raise HTTPException(status_code=404, detail="Usuario no encontrado")
+    finally:
+        db.close()
+
+@app.post("/test/mock-webhook")
+async def test_mock_webhook(
+    event_type: str = Form(...),  # "order_created" | "subscription_cancelled"
+    x_user_email: str = Depends(verify_tester_user)
+):
+    """Trigger a local mock Lemon Squeezy webhook to test background DB update logic instantly."""
+    db = SessionLocal()
+    try:
+        from models import Subscription
+        sub = db.query(Subscription).filter(Subscription.email == x_user_email).first()
+        if not sub:
+            sub = Subscription(email=x_user_email, status="free")
+            db.add(sub)
+            db.commit()
+            db.refresh(sub)
+
+        if event_type == "order_created":
+            sub.status = "active"
+            sub.current_period_end = datetime.datetime.utcnow() + datetime.timedelta(days=30)
+        elif event_type == "subscription_cancelled":
+            sub.status = "canceled"
+            
+        sub.updated_at = datetime.datetime.utcnow()
+        db.commit()
+        return {"success": True, "premium_status": sub.status, "event_simulated": event_type}
+    finally:
+        db.close()
+
+
+class SupportChatRequest(BaseModel):
+    message: str
+    history: list[dict] = []
+
+@app.post("/support-chat/")
+async def support_chat(req: SupportChatRequest):
+    api_key = os.getenv("ANTHROPIC_API_KEY")
+    if not api_key:
+        return {"reply": "¡Hola! Soy DocuBot, tu asistente de soporte de DocuFlow. (Nota: ANTHROPIC_API_KEY no configurada en el servidor). ¿En qué puedo ayudarte hoy?"}
+
+    try:
+        import anthropic
+        client = anthropic.Anthropic(api_key=api_key)
+        
+        system_prompt = (
+            "Eres DocuBot, el asistente inteligente de soporte técnico y comercial de DocuFlow.\n"
+            "DocuFlow es un software SaaS premium e inteligente para editar, convertir y optimizar documentos PDF.\n"
+            "Debes ser amable, conciso, profesional y ayudar al usuario en español.\n"
+            "Información Clave de DocuFlow:\n"
+            "- Plan Gratuito: 4 operaciones al día, archivos hasta 5 MB de tamaño, herramientas básicas (conversión de un archivo, editar texto, compresión, fusión hasta 2 PDFs).\n"
+            "- Plan Premium: Operaciones ilimitadas, archivos hasta 50 MB, OCR avanzado (para extraer texto de escaneos e imágenes), mejora de textos con IA (Claude), procesamiento por lote, y compartir con enlace público.\n"
+            "- Precios en Perú: S/ 34 al mes (moneda local). En Europa: 8 € al mes. En USA / Resto del mundo: $9 USD al mes.\n"
+            "- Privacidad y Seguridad: Todos los documentos subidos están seguros encriptados y se eliminan automáticamente del disco del servidor inmediatamente después de ser descargados.\n"
+            "- Si el usuario experimenta fallos o límites diarios, aliéntalo con educación a activar la Suscripción Premium en modo demo (completamente gratis para probar durante 7 días en la página de Precios).\n"
+            "- Mantén tus respuestas breves y directas (máximo 3 oraciones por mensaje para que quepa bien en el chat flotante)."
+        )
+
+        formatted_messages = []
+        for msg in req.history:
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+            if role in ["user", "assistant"] and content:
+                formatted_messages.append({"role": role, "content": content})
+                
+        formatted_messages.append({"role": "user", "content": req.message})
+
+        response = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            system=system_prompt,
+            messages=formatted_messages
+        )
+        reply = response.content[0].text
+        return {"reply": reply}
+    except Exception as e:
+        return {"reply": f"Lo siento, he tenido un inconveniente técnico al procesar tu solicitud: {str(e)}"}

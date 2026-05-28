@@ -1,0 +1,31 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(find c:UsersUserDownloadsEditorPDF -name *.exe)",
+      "Bash(python -m pip list)",
+      "Bash(where python:*)",
+      "Bash(py -3 -m pip list)",
+      "Bash(C:UsersUserAppDataLocalProgramsPythonPython313python.exe -m pip list)",
+      "Bash(C:UsersUserAppDataLocalProgramsPythonPython314python.exe -m pip list)",
+      "Bash(\"C:\\\\Users\\\\User\\\\AppData\\\\Local\\\\Programs\\\\Python\\\\Python313\\\\Scripts\\\\uvicorn.exe\" --version)",
+      "Bash(\"C:\\\\Users\\\\User\\\\AppData\\\\Local\\\\Programs\\\\Python\\\\Python314\\\\Scripts\\\\uvicorn.exe\" --version)",
+      "Read(//c/Users/User/AppData/Local/Programs/Python/Python313/Lib/site-packages/**)",
+      "Bash(\"C:\\\\Users\\\\User\\\\AppData\\\\Local\\\\Programs\\\\Python\\\\Python313\\\\python.exe\" -m pip install python-pptx openpyxl reportlab)",
+      "Bash(\"C:\\\\Users\\\\User\\\\AppData\\\\Local\\\\Programs\\\\Python\\\\Python313\\\\Scripts\\\\pip.exe\" install:*)",
+      "Read(//c/Users/User/AppData/Local/Programs/Python/Python313/Scripts/**)",
+      "Bash(find C:UsersUserAppDataLocalProgramsPythonPython313 -name pip*)",
+      "Bash(\"C:\\\\Users\\\\User\\\\AppData\\\\Local\\\\Programs\\\\Python\\\\Python313\\\\python.exe\" -m ensurepip)",
+      "Bash(find /c/Users/User/Downloads/EditorPDF/frontend/components -type f -name *.tsx)",
+      "Bash(powershell -Command \"\\(Get-Content ''DOCUMENTACION.md''\\) -replace ''EditorPDF'', ''DocuFlow'' -replace ''editorpdf'', ''docuflow'' | Set-Content ''DOCUMENTACION.md''\")",
+      "Bash(ls c:/Users/User/Downloads/EditorPDF/*.json c:/Users/User/Downloads/EditorPDF/.firebaserc)",
+      "Bash(firebase --version)",
+      "Bash(firebase projects:list)",
+      "Bash(firebase projects:create docuflow-app --display-name \"DocuFlow\")",
+      "Bash(firebase projects:create docuflow-prod-2025 --display-name \"DocuFlow\")",
+      "Bash(firebase use:*)",
+      "Bash(npm run:*)",
+      "Bash(firebase deploy:*)",
+      "Bash(firebase experiments:enable webframeworks)"
+    ]
+  }
+}

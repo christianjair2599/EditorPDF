@@ -21,17 +21,28 @@ export interface BlockEdit {
   color: string;
 }
 
-// ── Helpers ────────────────────────────────────────────────────────────────
+import { getSession } from "next-auth/react";
 
 async function post(path: string, body: FormData) {
   try {
-    const res = await fetch(`${API_URL}${path}`, { method: "POST", body });
+    const session = await getSession();
+    const email = session?.user?.email;
+    const headers: Record<string, string> = {};
+    if (email) {
+      headers["X-User-Email"] = email;
+    }
+    const res = await fetch(`${API_URL}${path}`, {
+      method: "POST",
+      body,
+      headers,
+    });
     return await res.json();
   } catch (err) {
     console.error(`POST ${path} failed:`, err);
     return null;
   }
 }
+
 
 // ── API calls ──────────────────────────────────────────────────────────────
 
@@ -51,7 +62,7 @@ export const convertFile = async (file: File, format: string) => {
 export const convertAny = async (
   file: File,
   format: string
-): Promise<{ output_file?: string; error?: string } | null> => {
+): Promise<{ output_file?: string; friendly_name?: string; error?: string } | null> => {
   const fd = new FormData();
   fd.append("file", file);
   fd.append("output_format", format);
@@ -155,10 +166,37 @@ export const watermarkPdf = async (
   return post("/watermark-pdf/", fd);
 };
 
+export const convertUrl = async (
+  url: string,
+  format: string
+): Promise<{ output_file?: string; friendly_name?: string; error?: string } | null> => {
+  const fd = new FormData();
+  fd.append("url", url);
+  fd.append("output_format", format);
+  return post("/url-to-pdf/", fd);
+};
+
 export const shareFile = async (
   file: File
 ): Promise<{ token?: string; filename?: string; error?: string } | null> => {
   const fd = new FormData();
   fd.append("file", file);
   return post("/share/", fd);
+};
+
+export const sendSupportMessage = async (
+  message: string,
+  history: { role: string; content: string }[]
+): Promise<{ reply?: string; error?: string } | null> => {
+  try {
+    const res = await fetch(`${API_URL}/support-chat/`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message, history }),
+    });
+    return await res.json();
+  } catch (err) {
+    console.error("Support chat call failed:", err);
+    return null;
+  }
 };

@@ -1,0 +1,34 @@
+# Firebase App Hosting configuration for DocuFlow (Next.js frontend)
+# Docs: https://firebase.google.com/docs/app-hosting/configure
+
+runConfig:
+  # Cloud Run region
+  region: us-central1
+  # Min instances to keep warm (0 = scale to zero when idle)
+  minInstances: 0
+  # Max instances to scale up to
+  maxInstances: 10
+  # Memory per instance
+  memory: 512MiB
+  # CPU per instance
+  cpu: 1
+  # Request timeout
+  concurrency: 80
+
+env:
+  # NextAuth — set these in the Firebase Console (App Hosting > Secrets)
+  - variable: NEXTAUTH_SECRET
+    secret: NEXTAUTH_SECRET
+
+  - variable: NEXTAUTH_URL
+    value: https://docuflow-app.web.app   # ← update with your actual domain
+
+  - variable: GOOGLE_CLIENT_ID
+    secret: GOOGLE_CLIENT_ID
+
+  - variable: GOOGLE_CLIENT_SECRET
+    secret: GOOGLE_CLIENT_SECRET
+
+  # Backend API URL (Cloud Run or any external host)
+  - variable: NEXT_PUBLIC_API_URL
+    value: https://YOUR_BACKEND_URL       # ← update with your Cloud Run URL
