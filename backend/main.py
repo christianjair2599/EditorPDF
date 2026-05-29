@@ -1,6 +1,7 @@
 from fastapi import FastAPI, File, UploadFile, Form, Request, Header, Depends, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
+from pydantic import BaseModel
 import shutil, os, uuid, json, csv, re, time, hmac, hashlib
 import stripe
 import datetime
@@ -133,6 +134,336 @@ def table_to_pdf(rows: list[list], output_path: str):
         ("PADDING",    (0, 0), (-1, -1), 5),
     ]))
     doc.build([t])
+
+def docx_to_pdf_high_fidelity(input_path: str, output_path: str):
+    """Converts a DOCX file to a PDF file with high fidelity styling and structured layout."""
+    import re
+    from docx import Document as DocxDocument
+    from docx.table import Table as DocxTable
+    from docx.text.paragraph import Paragraph as DocxParagraph
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    
+    from reportlab.lib.pagesizes import letter
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib import colors
+    from reportlab.lib.enums import TA_LEFT, TA_CENTER, TA_RIGHT, TA_JUSTIFY
+
+    def map_font_name(docx_font_name):
+        if not docx_font_name:
+            return None
+        name = docx_font_name.lower()
+        if "times" in name or "georgia" in name:
+            return "Times-Roman"
+        elif "courier" in name or "mono" in name:
+            return "Courier"
+        else:
+            return "Helvetica"
+
+    def rgb_to_hex(rgb_color):
+        if rgb_color is None:
+            return None
+        try:
+            return f"#{rgb_color[0]:02x}{rgb_color[1]:02x}{rgb_color[2]:02x}"
+        except Exception:
+            return None
+
+    doc = SimpleDocTemplate(
+        output_path, 
+        pagesize=letter,
+        leftMargin=40, 
+        rightMargin=40, 
+        topMargin=40, 
+        bottomMargin=40
+    )
+    
+    styles = getSampleStyleSheet()
+    styles_cache = {"Normal": styles["Normal"]}
+    
+    story = []
+    docx_doc = DocxDocument(input_path)
+    
+    for child in docx_doc.element.body.iterchildren():
+        tag = child.tag
+        
+        # 1. Convert paragraphs
+        if tag.endswith('p'):
+            p = DocxParagraph(child, docx_doc)
+            
+            p_markup = ""
+            for run in p.runs:
+                r_text = run.text
+                if not r_text:
+                    continue
+                r_escaped = r_text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\n", "<br/>")
+                
+                font = run.font
+                font_attrs = []
+                
+                if font.color and font.color.rgb:
+                    c_hex = rgb_to_hex(font.color.rgb)
+                    if c_hex:
+                        font_attrs.append(f'color="{c_hex}"')
+                if font.size:
+                    try:
+                        font_attrs.append(f'size="{font.size.pt}"')
+                    except Exception:
+                        pass
+                if font.name:
+                    f_name = map_font_name(font.name)
+                    if f_name:
+                        font_attrs.append(f'name="{f_name}"')
+                        
+                run_markup = r_escaped
+                if font_attrs:
+                    run_markup = f"<font {' '.join(font_attrs)}>{run_markup}</font>"
+                    
+                if run.bold:
+                    run_markup = f"<b>{run_markup}</b>"
+                if run.italic:
+                    run_markup = f"<i>{run_markup}</i>"
+                if run.underline:
+                    run_markup = f"<u>{run_markup}</u>"
+                    
+                p_markup += run_markup
+                
+            # Fallback if runs are empty but text is not
+            if not p_markup and p.text:
+                p_markup = p.text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\n", "<br/>")
+                
+            style_name = p.style.name if p.style else "Normal"
+            
+            # Prepend bullet to list items if missing
+            is_bullet = "bullet" in style_name.lower() or "list" in style_name.lower()
+            if is_bullet and not p_markup.strip().startswith(("&bull;", "•", "-", "*")):
+                p_markup = "&bull;&nbsp;&nbsp;" + p_markup
+                
+            # Alignment mapping
+            align = p.alignment
+            if align is None:
+                try:
+                    align = p.style.paragraph_format.alignment
+                except Exception:
+                    align = None
+                    
+            rl_align = TA_LEFT
+            if align == WD_ALIGN_PARAGRAPH.CENTER:
+                rl_align = TA_CENTER
+            elif align == WD_ALIGN_PARAGRAPH.RIGHT:
+                rl_align = TA_RIGHT
+            elif align == WD_ALIGN_PARAGRAPH.JUSTIFY:
+                rl_align = TA_JUSTIFY
+                
+            # Spacing and Indents
+            p_format = p.paragraph_format
+            left_indent = 0
+            if p_format.left_indent is not None:
+                try:
+                    left_indent = p_format.left_indent.pt
+                except Exception:
+                    pass
+            space_before = 0
+            if p_format.space_before is not None:
+                try:
+                    space_before = p_format.space_before.pt
+                except Exception:
+                    pass
+            space_after = 6
+            if p_format.space_after is not None:
+                try:
+                    space_after = p_format.space_after.pt
+                except Exception:
+                    pass
+                    
+            if not p_markup.strip():
+                # Represent empty paragraph as visual space
+                story.append(Spacer(1, 10))
+                continue
+                
+            style_key = f"{style_name}_{rl_align}_{left_indent}_{space_before}_{space_after}"
+            if style_key not in styles_cache:
+                font_size = 11
+                leading = 14
+                bold_font = False
+                font_name = "Helvetica"
+                
+                s_name = style_name.lower()
+                if "title" in s_name:
+                    font_size = 24
+                    leading = 28
+                    bold_font = True
+                elif "subtitle" in s_name:
+                    font_size = 16
+                    leading = 20
+                elif "heading 1" in s_name or "heading1" in s_name:
+                    font_size = 18
+                    leading = 22
+                    bold_font = True
+                    space_before = 12 if space_before == 0 else space_before
+                    space_after = 6 if space_after == 6 else space_after
+                elif "heading 2" in s_name or "heading2" in s_name:
+                    font_size = 14
+                    leading = 18
+                    bold_font = True
+                    space_before = 10 if space_before == 0 else space_before
+                    space_after = 4 if space_after == 6 else space_after
+                elif "heading 3" in s_name or "heading3" in s_name:
+                    font_size = 12
+                    leading = 15
+                    bold_font = True
+                    space_before = 8 if space_before == 0 else space_before
+                    space_after = 4 if space_after == 6 else space_after
+                elif "list" in s_name or "bullet" in s_name:
+                    left_indent = left_indent or 20
+                    space_after = 3 if space_after == 6 else space_after
+                    
+                r_style = ParagraphStyle(
+                    name=f"Style_{style_name}_{rl_align}_{left_indent}_{len(styles_cache)}",
+                    parent=styles_cache["Normal"],
+                    fontName="Helvetica-Bold" if bold_font else font_name,
+                    fontSize=font_size,
+                    leading=leading,
+                    alignment=rl_align,
+                    leftIndent=left_indent,
+                    spaceBefore=space_before,
+                    spaceAfter=space_after
+                )
+                styles_cache[style_key] = r_style
+            else:
+                r_style = styles_cache[style_key]
+                
+            story.append(Paragraph(p_markup, r_style))
+            
+        # 2. Convert tables
+        elif tag.endswith('tbl'):
+            table = DocxTable(child, docx_doc)
+            num_rows = len(table.rows)
+            if num_rows == 0:
+                continue
+            num_cols = len(table.rows[0].cells)
+            if num_cols == 0:
+                continue
+                
+            # Compute column widths in points (usable page width = 532)
+            col_widths = []
+            first_row = table.rows[0]
+            for cell in first_row.cells:
+                w = cell.width
+                if w and w > 0:
+                    col_widths.append(w / 12700.0)
+                else:
+                    col_widths.append(0.0)
+            
+            usable_w = 532.0
+            if all(w == 0 for w in col_widths):
+                col_widths = [usable_w / num_cols] * num_cols
+            else:
+                non_zero = [w for w in col_widths if w > 0]
+                avg_w = sum(non_zero) / len(non_zero) if non_zero else usable_w / num_cols
+                col_widths = [w if w > 0 else avg_w for w in col_widths]
+                
+                total_w = sum(col_widths)
+                if total_w > usable_w or total_w < 200.0:
+                    scale = usable_w / total_w
+                    col_widths = [w * scale for w in col_widths]
+                    
+            # Parse cell paragraphs
+            grid_data = []
+            for row in table.rows:
+                row_data = []
+                for cell in row.cells:
+                    cell_flowables = []
+                    for cp in cell.paragraphs:
+                        cp_markup = ""
+                        for crun in cp.runs:
+                            cr_text = crun.text
+                            if not cr_text:
+                                continue
+                            cr_escaped = cr_text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\n", "<br/>")
+                            
+                            cfont = crun.font
+                            cfont_attrs = []
+                            
+                            if cfont.color and cfont.color.rgb:
+                                cc_hex = rgb_to_hex(cfont.color.rgb)
+                                if cc_hex:
+                                    cfont_attrs.append(f'color="{cc_hex}"')
+                            if cfont.size:
+                                try:
+                                    cfont_attrs.append(f'size="{cfont.size.pt}"')
+                                except Exception:
+                                    pass
+                            if cfont.name:
+                                cf_name = map_font_name(cfont.name)
+                                if cf_name:
+                                    cfont_attrs.append(f'name="{cf_name}"')
+                                    
+                            crun_markup = cr_escaped
+                            if cfont_attrs:
+                                crun_markup = f"<font {' '.join(cfont_attrs)}>{crun_markup}</font>"
+                                
+                            if crun.bold:
+                                crun_markup = f"<b>{crun_markup}</b>"
+                            if crun.italic:
+                                crun_markup = f"<i>{crun_markup}</i>"
+                            if crun.underline:
+                                crun_markup = f"<u>{crun_markup}</u>"
+                                
+                            cp_markup += crun_markup
+                            
+                        if not cp_markup and cp.text:
+                            cp_markup = cp.text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\n", "<br/>")
+                            
+                        if not cp_markup.strip():
+                            continue
+                            
+                        cell_p_style = styles_cache.get("TableCellStyle")
+                        if not cell_p_style:
+                            cell_p_style = ParagraphStyle(
+                                name="TableCellStyle",
+                                parent=styles_cache["Normal"],
+                                fontSize=9,
+                                leading=11,
+                                spaceAfter=2
+                            )
+                            styles_cache["TableCellStyle"] = cell_p_style
+                            
+                        cell_flowables.append(Paragraph(cp_markup, cell_p_style))
+                        
+                    if not cell_flowables:
+                        cell_p_style = styles_cache.get("TableCellStyle")
+                        if not cell_p_style:
+                            cell_p_style = ParagraphStyle(
+                                name="TableCellStyle",
+                                parent=styles_cache["Normal"],
+                                fontSize=9,
+                                leading=11,
+                                spaceAfter=2
+                            )
+                            styles_cache["TableCellStyle"] = cell_p_style
+                        cell_flowables.append(Paragraph("", cell_p_style))
+                        
+                    row_data.append(cell_flowables)
+                grid_data.append(row_data)
+                
+            ts = TableStyle([
+                ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#cccccc")),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("PADDING", (0, 0), (-1, -1), 6),
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#eaeef3")),
+                ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f7f9fb")]),
+            ])
+            
+            rl_table = Table(grid_data, colWidths=col_widths)
+            rl_table.setStyle(ts)
+            story.append(rl_table)
+            story.append(Spacer(1, 12))
+            
+    if not story:
+        story.append(Paragraph("(Sin contenido)", styles["Normal"]))
+        
+    doc.build(story)
+
 
 def stitch_images(imgs: list, output_path: str, fmt: str):
     if len(imgs) == 1:
@@ -396,7 +727,7 @@ async def convert_any(
 
             if fmt == "pdf":
                 output_file = f"{base}.pdf"
-                text_to_pdf(full_text, output_file)
+                docx_to_pdf_high_fidelity(input_file, output_file)
 
             elif fmt == "txt":
                 output_file = f"{base}.txt"
