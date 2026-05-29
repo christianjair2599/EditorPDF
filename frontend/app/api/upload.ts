@@ -61,11 +61,15 @@ export const convertFile = async (file: File, format: string) => {
 
 export const convertAny = async (
   file: File,
-  format: string
+  format: string,
+  mode: string = "visual",
+  aiPrompt: string = "summary"
 ): Promise<{ output_file?: string; friendly_name?: string; error?: string } | null> => {
   const fd = new FormData();
   fd.append("file", file);
   fd.append("output_format", format);
+  fd.append("conversion_mode", mode);
+  fd.append("ai_prompt", aiPrompt);
   return post("/convert-any/", fd);
 };
 
@@ -168,12 +172,36 @@ export const watermarkPdf = async (
 
 export const convertUrl = async (
   url: string,
-  format: string
+  format: string,
+  mode: string = "visual",
+  aiPrompt: string = "summary"
 ): Promise<{ output_file?: string; friendly_name?: string; error?: string } | null> => {
   const fd = new FormData();
   fd.append("url", url);
   fd.append("output_format", format);
+  fd.append("conversion_mode", mode);
+  fd.append("ai_prompt", aiPrompt);
   return post("/url-to-pdf/", fd);
+};
+
+export const getUrlPdfPreview = async (
+  url: string,
+  aiPrompt: string = "summary"
+): Promise<{ preview?: string; error?: string } | null> => {
+  const fd = new FormData();
+  fd.append("url", url);
+  fd.append("ai_prompt", aiPrompt);
+  return post("/url-to-pdf/preview/", fd);
+};
+
+export const getConvertPreview = async (
+  file: File,
+  aiPrompt: string = "summary"
+): Promise<{ preview?: string; error?: string } | null> => {
+  const fd = new FormData();
+  fd.append("file", file);
+  fd.append("ai_prompt", aiPrompt);
+  return post("/convert/preview/", fd);
 };
 
 export const shareFile = async (

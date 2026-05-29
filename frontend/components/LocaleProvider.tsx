@@ -38,7 +38,7 @@ export function LocaleProvider({ children }: { children: ReactNode }) {
         setBrowserLocale(parsed.browserLocale);
         setCurrency(parsed.currency);
         return;
-      } catch (e) {
+      } catch {
         // ignore
       }
     }

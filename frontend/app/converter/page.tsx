@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { convertAny, convertUrl, shareFile, API_URL } from "../api/upload";
+import { convertAny, convertUrl, shareFile, API_URL, getUrlPdfPreview, getConvertPreview } from "../api/upload";
 import { addActivity, getPrefs, savePrefs } from "../../lib/activity";
 import { canUse, canOperate, fileSizeAllowed, incrementOps, FREE_MAX_FILE_MB } from "../../lib/plan";
 import { usePremiumGate, DailyUsageBanner } from "../../components/PremiumGate";
@@ -89,6 +89,72 @@ const URL_FORMATS: { fmt: string; label: string; icon: string; description: stri
 type Alert = { type: "success" | "error"; text: string };
 function getExt(name: string) { return name.split(".").pop()?.toLowerCase() ?? ""; }
 
+// Simple bold syntax replacement (**text** -> <strong>)
+const renderTextWithBold = (text: string) => {
+  const parts = text.split(/\*\*([^*]+)\*\*/g);
+  return parts.map((part, i) => {
+    if (i % 2 === 1) {
+      return <strong key={i} className="font-bold text-gray-900 dark:text-white">{part}</strong>;
+    }
+    return part;
+  });
+};
+
+const MarkdownPreview = ({ text }: { text: string }) => {
+  const lines = text.split("\n");
+  return (
+    <div className="space-y-3 text-sm text-gray-800 dark:text-gray-200 leading-relaxed font-sans">
+      {lines.map((line, idx) => {
+        const trimmed = line.trim();
+        if (!trimmed) return <div key={idx} className="h-2" />;
+
+        // Header check
+        if (trimmed.startsWith("### ")) {
+          return (
+            <h4 key={idx} className="text-base font-bold text-gray-900 dark:text-white pt-2 border-b border-gray-100 dark:border-gray-800 pb-1">
+              {trimmed.substring(4)}
+            </h4>
+          );
+        }
+        if (trimmed.startsWith("## ")) {
+          return (
+            <h3 key={idx} className="text-lg font-black bg-gradient-to-r from-purple-600 to-indigo-500 bg-clip-text text-transparent pt-3">
+              {trimmed.substring(3)}
+            </h3>
+          );
+        }
+        if (trimmed.startsWith("# ")) {
+          return (
+            <h2 key={idx} className="text-xl font-black text-gray-900 dark:text-white pt-4 pb-2">
+              {trimmed.substring(2)}
+            </h2>
+          );
+        }
+
+        // List item check
+        if (trimmed.startsWith("- ") || trimmed.startsWith("* ")) {
+          const content = trimmed.substring(2);
+          return (
+            <div key={idx} className="flex items-start gap-2 pl-2">
+              <span className="text-purple-500 mt-1.5 text-xs flex-shrink-0">•</span>
+              <p className="flex-1 text-gray-700 dark:text-gray-300">
+                {renderTextWithBold(content)}
+              </p>
+            </div>
+          );
+        }
+
+        // Regular paragraph
+        return (
+          <p key={idx} className="text-gray-700 dark:text-gray-300">
+            {renderTextWithBold(trimmed)}
+          </p>
+        );
+      })}
+    </div>
+  );
+};
+
 export default function ConverterPage() {
   const [mounted, setMounted] = useState(false);
   useEffect(() => {
@@ -119,18 +185,65 @@ export default function ConverterPage() {
   const [urlFmt, setUrlFmt]           = useState("pdf");
   const [urlError, setUrlError]       = useState("");
 
+  // AI and Previews
+  const [conversionMode, setConversionMode] = useState<"visual" | "ai">("visual");
+  const [aiPrompt, setAiPrompt]             = useState<"summary" | "formal" | "translation" | "brief">("summary");
+  const [previewText, setPreviewText]       = useState<string | null>(null);
+  const [isPreviewLoading, setIsPreviewLoading] = useState(false);
+  const [previewError, setPreviewError]     = useState<string | null>(null);
+
   const batchGate  = usePremiumGate("batch");
   const shareGate  = usePremiumGate("share");
   const limitGate  = usePremiumGate("daily_limit");
+
+  const handleResetPreviews = () => {
+    setPreviewText(null);
+    setPreviewError(null);
+    setIsPreviewLoading(false);
+    setResultFile(null);
+    setShareUrl(null);
+    setAlert(null);
+  };
+
+  const handleGeneratePreview = async () => {
+    if (isUrlMode) {
+      const trimmed = urlInput.trim();
+      if (!trimmed) { setUrlError("Ingresa una URL válida."); return; }
+      if (!/^https?:\/\//i.test(trimmed)) { setUrlError("La URL debe comenzar con http:// o https://"); return; }
+      
+      setIsPreviewLoading(true);
+      setPreviewError(null);
+      setPreviewText(null);
+      
+      const res = await getUrlPdfPreview(trimmed, aiPrompt);
+      setIsPreviewLoading(false);
+      if (res?.preview) {
+        setPreviewText(res.preview);
+      } else {
+        setPreviewError(res?.error || "No se pudo generar la previsualización.");
+      }
+    } else {
+      if (!file) return;
+      setIsPreviewLoading(true);
+      setPreviewError(null);
+      setPreviewText(null);
+      
+      const res = await getConvertPreview(file, aiPrompt);
+      setIsPreviewLoading(false);
+      if (res?.preview) {
+        setPreviewText(res.preview);
+      } else {
+        setPreviewError(res?.error || "No se pudo generar la previsualización.");
+      }
+    }
+  };
 
   useEffect(() => {
     if (!file) return;
     const ext = getExt(file.name);
     setFileExt(ext);
     setSelectedFmt("");
-    setResultFile(null);
-    setFriendlyName(null);
-    setAlert(null);
+    handleResetPreviews();
     const available = CONVERSION_MAP[ext] ?? [];
     const { lastFormat } = getPrefs();
     setSelectedFmt(available.includes(lastFormat) ? lastFormat : (available[0] ?? ""));
@@ -140,7 +253,6 @@ export default function ConverterPage() {
   const inputInfo      = INPUT_INFO[fileExt];
   const selectedDef    = selectedFmt ? OUTPUT_FORMATS[selectedFmt] : null;
   const batchAvailable = CONVERSION_MAP[batchFileExt] ?? [];
-  const batchInputInfo = INPUT_INFO[batchFileExt];
 
   const handleFileSelect = (f: File) => {
     const ext = getExt(f.name);
@@ -187,8 +299,7 @@ export default function ConverterPage() {
 
   const handleFormatChange = (fmt: string) => {
     setSelectedFmt(fmt);
-    setResultFile(null);
-    setAlert(null);
+    handleResetPreviews();
     savePrefs({ lastFormat: fmt });
   };
 
@@ -222,7 +333,7 @@ export default function ConverterPage() {
       for (let i = 0; i < files.length; i++) {
         if (!canOperate()) { limitGate.setOpen(true); break; }
         const f = files[i];
-        const res = await convertAny(f, selectedFmt);
+        const res = await convertAny(f, selectedFmt, conversionMode, aiPrompt);
         if (res?.output_file) {
           results.push(res.output_file);
           incrementOps();
@@ -241,7 +352,7 @@ export default function ConverterPage() {
     } else if (!isBatch && file && selectedFmt) {
       setIsLoading(true);
       setAlert(null);
-      const res = await convertAny(file, selectedFmt);
+      const res = await convertAny(file, selectedFmt, conversionMode, aiPrompt);
       setIsLoading(false);
       if (res?.output_file) {
         incrementOps();
@@ -266,7 +377,7 @@ export default function ConverterPage() {
     setAlert(null);
     setResultFile(null);
     setShareUrl(null);
-    const res = await convertUrl(trimmed, urlFmt);
+    const res = await convertUrl(trimmed, urlFmt, conversionMode, aiPrompt);
     setIsLoading(false);
     if (res?.output_file) {
       incrementOps();
@@ -297,414 +408,617 @@ export default function ConverterPage() {
         </div>
       </div>
 
-      <div className="max-w-4xl mx-auto px-4 py-8 space-y-5">
-
-        {/* Modals */}
-        {batchGate.modal}
-        {shareGate.modal}
-        {limitGate.modal}
-
-        {/* Daily usage */}
+      <div className="max-w-7xl mx-auto px-4 py-8 space-y-6">
+        {/* Daily usage banner at top spanning full width */}
         <DailyUsageBanner />
 
-        {/* Mode selector: File vs URL */}
-        <div className="flex gap-2 bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm p-1.5">
-          <button
-            type="button"
-            onClick={() => { setIsUrlMode(false); setResultFile(null); setAlert(null); setShareUrl(null); }}
-            className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-bold transition-all ${
-              !isUrlMode ? "bg-emerald-500 text-white shadow-sm" : "text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800"
-            }`}
-          >
-            📂 Desde archivo
-          </button>
-          <button
-            type="button"
-            onClick={() => { setIsUrlMode(true); setFile(null); setResultFile(null); setAlert(null); setShareUrl(null); }}
-            className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-bold transition-all ${
-              isUrlMode ? "bg-blue-500 text-white shadow-sm" : "text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800"
-            }`}
-          >
-            🔗 Desde URL
-          </button>
-        </div>
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+          
+          {/* LEFT COLUMN: Input Configuration (lg:col-span-5) */}
+          <div className="lg:col-span-5 space-y-5">
+            
+            {/* Mode selector: File vs URL */}
+            <div className="flex gap-2 bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm p-1.5">
+              <button
+                type="button"
+                onClick={() => { setIsUrlMode(false); setResultFile(null); setAlert(null); setShareUrl(null); }}
+                className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-bold transition-all ${
+                  !isUrlMode ? "bg-emerald-500 text-white shadow-sm" : "text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800"
+                }`}
+              >
+                📂 Desde archivo
+              </button>
+              <button
+                type="button"
+                onClick={() => { setIsUrlMode(true); setFile(null); setResultFile(null); setAlert(null); setShareUrl(null); }}
+                className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-bold transition-all ${
+                  isUrlMode ? "bg-blue-500 text-white shadow-sm" : "text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800"
+                }`}
+              >
+                🔗 Desde URL
+              </button>
+            </div>
 
-        {/* Batch toggle */}
-        <div className="flex items-center justify-between bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm px-5 py-3">
-          <div>
-            <p className="text-sm font-bold text-gray-800 dark:text-gray-200">Modo lote</p>
-            <p className="text-xs text-gray-400 dark:text-gray-500">Convierte múltiples archivos a la vez</p>
-          </div>
-          {!mounted ? (
-            <div className="w-12 h-6 bg-gray-200 dark:bg-gray-800 rounded-full animate-pulse" />
-          ) : canUse("batch") ? (
-            <button
-              type="button"
-              onClick={() => { setIsBatch((b) => !b); setFile(null); setFiles([]); setResultFile(null); setBatchResults([]); setBatchFileExt(""); setSelectedFmt(""); }}
-              title={isBatch ? "Desactivar modo lote" : "Activar modo lote"}
-              className={`relative w-12 h-6 rounded-full transition-colors ${isBatch ? "bg-emerald-500" : "bg-gray-200 dark:bg-gray-700"}`}
-            >
-              <span className={`absolute top-1 left-1 w-4 h-4 bg-white rounded-full shadow transition-transform ${isBatch ? "translate-x-6" : "translate-x-0"}`} />
-            </button>
-          ) : (
-            <button type="button" onClick={() => batchGate.setOpen(true)}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-gradient-to-r from-yellow-400 to-orange-500 text-white text-xs font-black rounded-full hover:scale-105 transition-transform"
-            >
-              👑 Premium
-            </button>
-          )}
-        </div>
-
-        {/* Supported types banner */}
-        <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm p-4">
-          <p className="text-xs font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-3">Tipos de archivo compatibles</p>
-          <div className="flex flex-wrap gap-2">
-            {INPUT_CATEGORIES.map((cat) => (
-              <div key={cat.label} className={`flex items-center gap-2 px-3 py-1.5 rounded-xl border text-xs font-semibold ${cat.color}`}>
-                <span className="font-bold">{cat.label}:</span>
-                {cat.exts.filter((e) => INPUT_INFO[e]).map((e) => (
-                  <span key={e} className="opacity-80">{INPUT_INFO[e]?.icon} .{e.toUpperCase()}</span>
-                ))}
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* URL input zone */}
-        {isUrlMode && (
-          <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm p-6 space-y-5">
-            <div>
-              <label className="block text-sm font-bold text-gray-700 dark:text-gray-300 mb-2">
-                🔗 Ingresa el enlace de la página web
-              </label>
-              <div className="flex gap-2">
-                <input
-                  type="url"
-                  value={urlInput}
-                  onChange={(e) => { setUrlInput(e.target.value); setUrlError(""); }}
-                  onKeyDown={(e) => e.key === "Enter" && handleUrlConvert()}
-                  placeholder="https://ejemplo.com/pagina"
-                  className={`flex-1 px-4 py-3 rounded-xl border text-sm bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-400 focus:outline-none focus:ring-2 transition-all ${
-                    urlError ? "border-red-400 focus:ring-red-300" : "border-gray-200 dark:border-gray-700 focus:ring-blue-300 focus:border-blue-400"
-                  }`}
-                />
-                {urlInput && (
-                  <button type="button" onClick={() => { setUrlInput(""); setUrlError(""); }}
-                    className="px-3 text-gray-400 hover:text-red-500 transition-colors"
-                  >✕</button>
+            {/* Batch toggle (Files only) */}
+            {!isUrlMode && (
+              <div className="flex items-center justify-between bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm px-5 py-3">
+                <div>
+                  <p className="text-sm font-bold text-gray-800 dark:text-gray-200">Modo lote</p>
+                  <p className="text-xs text-gray-400 dark:text-gray-500">Convierte múltiples archivos a la vez</p>
+                </div>
+                {!mounted ? (
+                  <div className="w-12 h-6 bg-gray-200 dark:bg-gray-800 rounded-full animate-pulse" />
+                ) : canUse("batch") ? (
+                  <button
+                    type="button"
+                    onClick={() => { setIsBatch((b) => !b); setFile(null); setFiles([]); setResultFile(null); setBatchResults([]); setBatchFileExt(""); setSelectedFmt(""); }}
+                    title={isBatch ? "Desactivar modo lote" : "Activar modo lote"}
+                    className={`relative w-12 h-6 rounded-full transition-colors ${isBatch ? "bg-emerald-500" : "bg-gray-200 dark:bg-gray-700"}`}
+                  >
+                    <span className={`absolute top-1 left-1 w-4 h-4 bg-white rounded-full shadow transition-transform ${isBatch ? "translate-x-6" : "translate-x-0"}`} />
+                  </button>
+                ) : (
+                  <button type="button" onClick={() => batchGate.setOpen(true)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-gradient-to-r from-yellow-400 to-orange-500 text-white text-xs font-black rounded-full hover:scale-105 transition-transform"
+                  >
+                    👑 Premium
+                  </button>
                 )}
               </div>
-              {urlError && <p className="text-xs text-red-500 mt-1.5">{urlError}</p>}
-              <p className="text-xs text-gray-400 dark:text-gray-500 mt-1.5">
-                La página será capturada tal como aparece en el navegador
-              </p>
-            </div>
+            )}
 
-            {/* URL format selector */}
-            <div>
-              <p className="text-xs font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wide mb-3">
-                Convertir a:
-              </p>
-              <div className="grid grid-cols-3 sm:grid-cols-5 gap-2">
-                {URL_FORMATS.map((f) => (
-                  <button key={f.fmt} type="button" onClick={() => setUrlFmt(f.fmt)}
-                    className={`flex flex-col items-center p-3 rounded-xl border-2 transition-all text-center ${
-                      urlFmt === f.fmt
-                        ? f.card + " shadow-sm scale-[1.04]"
-                        : "border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-500 dark:text-gray-400 hover:border-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 hover:shadow-sm"
-                    }`}
-                  >
-                    <span className="text-xl mb-1">{f.icon}</span>
-                    <span className="font-bold text-xs">{f.label}</span>
-                    <span className="text-xs mt-0.5 opacity-60 leading-tight">{f.description}</span>
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* URL → Format visual indicator */}
-            <div className="flex items-center gap-3">
-              <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl border border-blue-200 bg-blue-50 text-blue-700 text-sm font-bold">
-                🌐 URL
-              </div>
-              <div className="flex-1 flex items-center gap-2 text-gray-300">
-                <div className="flex-1 h-px bg-gradient-to-r from-blue-200 to-blue-400" />
-                <span className="text-xl">→</span>
-                <div className="flex-1 h-px bg-gradient-to-r from-blue-400 to-blue-200" />
-              </div>
-              {(() => { const f = URL_FORMATS.find((x) => x.fmt === urlFmt)!; return (
-                <div className={`flex items-center gap-2 px-3 py-1.5 rounded-xl border text-sm font-bold ${f.card}`}>
-                  {f.icon} {f.label}
+            {/* Upload zone or URL Input Zone */}
+            {isUrlMode ? (
+              <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm p-6 space-y-4">
+                <div>
+                  <label className="block text-sm font-bold text-gray-700 dark:text-gray-300 mb-2">
+                    🔗 Ingresa el enlace de la página web
+                  </label>
+                  <div className="flex gap-2">
+                    <input
+                      type="url"
+                      value={urlInput}
+                      onChange={(e) => { setUrlInput(e.target.value); setUrlError(""); }}
+                      onKeyDown={(e) => e.key === "Enter" && handleUrlConvert()}
+                      placeholder="https://ejemplo.com/pagina"
+                      className={`flex-1 px-4 py-3 rounded-xl border text-sm bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-400 focus:outline-none focus:ring-2 transition-all ${
+                        urlError ? "border-red-400 focus:ring-red-300" : "border-gray-200 dark:border-gray-700 focus:ring-blue-300 focus:border-blue-400"
+                      }`}
+                    />
+                    {urlInput && (
+                      <button type="button" onClick={() => { setUrlInput(""); setUrlError(""); }}
+                        className="px-3 text-gray-400 hover:text-red-500 transition-colors"
+                      >✕</button>
+                    )}
+                  </div>
+                  {urlError && <p className="text-xs text-red-500 mt-1.5">{urlError}</p>}
                 </div>
-              ); })()}
-            </div>
-          </div>
-        )}
 
-        {/* Upload zone */}
-        {!isUrlMode && !isBatch && <div
-          onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
-          onDragLeave={() => setIsDragging(false)}
-          onDrop={handleDrop}
-          onClick={() => !file && inputRef.current?.click()}
-          className={`border-2 border-dashed rounded-2xl p-10 text-center transition-all ${
-            file
-              ? "border-emerald-400 bg-emerald-50 dark:bg-emerald-900/20 cursor-default"
-              : isDragging
-              ? "border-blue-400 bg-blue-50 dark:bg-blue-900/20 scale-[1.01] cursor-pointer"
-              : "border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 hover:border-gray-400 dark:hover:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-800 cursor-pointer"
-          }`}
-        >
-          <input ref={inputRef} type="file" accept={ACCEPTED_EXTS}
-            aria-label="Seleccionar archivo" className="hidden"
-            onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFileSelect(f); }}
-          />
-          {file && inputInfo ? (
-            <div className="flex items-center justify-center gap-4 flex-wrap">
-              <div className={`w-14 h-14 rounded-2xl border-2 flex items-center justify-center text-3xl flex-shrink-0 ${inputInfo.color}`}>
-                {inputInfo.icon}
-              </div>
-              <div className="text-left">
-                <p className="font-bold text-gray-900 dark:text-white truncate max-w-xs">{file.name}</p>
-                <div className="flex items-center gap-2 mt-1">
-                  <span className={`text-xs font-semibold px-2 py-0.5 rounded-full border ${inputInfo.color}`}>{inputInfo.label}</span>
-                  <span className="text-xs text-gray-400">{(file.size / 1024).toFixed(1)} KB</span>
-                  <span className="text-xs text-emerald-600 font-medium">{available.length} formatos disponibles</span>
+                {/* URL format selector */}
+                <div>
+                  <p className="text-xs font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wide mb-3">
+                    Convertir a:
+                  </p>
+                  <div className="grid grid-cols-3 gap-2">
+                    {URL_FORMATS.map((f) => (
+                      <button key={f.fmt} type="button" onClick={() => setUrlFmt(f.fmt)}
+                        className={`flex flex-col items-center p-3 rounded-xl border-2 transition-all text-center ${
+                          urlFmt === f.fmt
+                            ? f.card + " shadow-sm scale-[1.04]"
+                            : "border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-500 dark:text-gray-400 hover:border-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 hover:shadow-sm"
+                        }`}
+                      >
+                        <span className="text-xl mb-1">{f.icon}</span>
+                        <span className="font-bold text-xs">{f.label}</span>
+                        <span className="text-[10px] mt-0.5 opacity-60 leading-tight">{f.description}</span>
+                      </button>
+                    ))}
+                  </div>
                 </div>
               </div>
-              <button type="button"
-                onClick={(e) => { e.stopPropagation(); setFile(null); setFileExt(""); setSelectedFmt(""); setResultFile(null); setAlert(null); }}
-                className="ml-auto text-red-400 hover:text-red-600 text-sm font-medium flex-shrink-0"
-              >✕ Cambiar</button>
-            </div>
-          ) : (
-            <>
-              <div className="text-5xl mb-3">📂</div>
-              <p className="font-bold text-gray-700 dark:text-gray-200">Arrastra cualquier archivo aquí</p>
-              <p className="text-sm text-gray-400 dark:text-gray-500 mt-1">PDF, Word, Excel, PowerPoint, Imágenes, TXT, HTML, CSV y más</p>
-              <p className="text-xs text-gray-300 dark:text-gray-600 mt-3">o haz clic para seleccionar</p>
-            </>
-          )}
-        </div>}
-
-        {/* Batch upload zone */}
-        {!isUrlMode && isBatch && (
-          <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm p-6 space-y-4">
-            <div
-              onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
-              onDragLeave={() => setIsDragging(false)}
-              onDrop={handleDrop}
-              onClick={() => batchInputRef.current?.click()}
-              className={`border-2 border-dashed rounded-xl p-8 text-center cursor-pointer transition-all ${
-                isDragging
-                  ? "border-emerald-400 bg-emerald-50 dark:bg-emerald-900/20 scale-[1.01]"
-                  : "border-gray-300 dark:border-gray-600 hover:border-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/10"
-              }`}
-            >
-              <input
-                ref={batchInputRef}
-                type="file"
-                multiple
-                accept={ACCEPTED_EXTS}
-                aria-label="Seleccionar archivos en lote"
-                className="hidden"
-                onChange={(e) => { const ff = Array.from(e.target.files ?? []); if (ff.length > 0) handleBatchFileSelect(ff); e.target.value = ""; }}
-              />
-              <div className="text-4xl mb-2">📂</div>
-              <p className="font-bold text-gray-700 dark:text-gray-200">Arrastra múltiples archivos aquí</p>
-              <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">o haz clic para seleccionar varios</p>
-            </div>
-            {files.length > 0 && (
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <p className="text-sm font-bold text-gray-700 dark:text-gray-300">{files.length} archivo{files.length !== 1 ? "s" : ""} cargado{files.length !== 1 ? "s" : ""}:</p>
-                  <button type="button" onClick={() => { setFiles([]); setBatchFileExt(""); setSelectedFmt(""); setResultFile(null); }} className="text-xs text-red-500 hover:text-red-700 font-medium">Limpiar todo</button>
+            ) : isBatch ? (
+              <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm p-6 space-y-4">
+                <div
+                  onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
+                  onDragLeave={() => setIsDragging(false)}
+                  onDrop={handleDrop}
+                  onClick={() => batchInputRef.current?.click()}
+                  className={`border-2 border-dashed rounded-xl p-8 text-center cursor-pointer transition-all ${
+                    isDragging
+                      ? "border-emerald-400 bg-emerald-50 dark:bg-emerald-900/20 scale-[1.01]"
+                      : "border-gray-300 dark:border-gray-600 hover:border-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/10"
+                  }`}
+                >
+                  <input
+                    ref={batchInputRef}
+                    type="file"
+                    multiple
+                    accept={ACCEPTED_EXTS}
+                    aria-label="Seleccionar archivos en lote"
+                    className="hidden"
+                    onChange={(e) => { const ff = Array.from(e.target.files ?? []); if (ff.length > 0) handleBatchFileSelect(ff); e.target.value = ""; }}
+                  />
+                  <div className="text-4xl mb-2">📂</div>
+                  <p className="font-bold text-gray-700 dark:text-gray-200">Arrastra múltiples archivos aquí</p>
+                  <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">o haz clic para seleccionar varios</p>
                 </div>
-                <div className="max-h-40 overflow-y-auto space-y-1">
-                  {files.map((f, i) => {
-                    const ext = getExt(f.name);
-                    const info = INPUT_INFO[ext];
-                    return (
-                      <div key={i} className="flex items-center gap-3 p-2 bg-gray-50 dark:bg-gray-800 rounded-lg text-sm">
-                        <span>{info?.icon ?? "📄"}</span>
-                        <span className="flex-1 truncate text-gray-700 dark:text-gray-300">{f.name}</span>
-                        <span className="text-xs text-gray-400">{(f.size / 1024).toFixed(1)} KB</span>
-                        <button type="button" onClick={() => { const updated = files.filter((_, idx) => idx !== i); setFiles(updated); if (updated.length === 0) { setBatchFileExt(""); setSelectedFmt(""); } }} className="text-red-400 hover:text-red-600 text-xs font-bold">✕</button>
+                {files.length > 0 && (
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <p className="text-xs font-bold text-gray-700 dark:text-gray-300">{files.length} archivo{files.length !== 1 ? "s" : ""} cargado{files.length !== 1 ? "s" : ""}:</p>
+                      <button type="button" onClick={() => { setFiles([]); setBatchFileExt(""); setSelectedFmt(""); setResultFile(null); }} className="text-xs text-red-500 hover:text-red-700 font-medium">Limpiar todo</button>
+                    </div>
+                    <div className="max-h-36 overflow-y-auto space-y-1 pr-1 scrollbar-thin">
+                      {files.map((f, i) => {
+                        const ext = getExt(f.name);
+                        const info = INPUT_INFO[ext];
+                        return (
+                          <div key={i} className="flex items-center gap-3 p-2 bg-gray-50 dark:bg-gray-800 rounded-lg text-xs">
+                            <span>{info?.icon ?? "📄"}</span>
+                            <span className="flex-1 truncate text-gray-700 dark:text-gray-300">{f.name}</span>
+                            <span className="text-[10px] text-gray-400 flex-shrink-0">{(f.size / 1024).toFixed(1)} KB</span>
+                            <button type="button" onClick={() => { const updated = files.filter((_, idx) => idx !== i); setFiles(updated); if (updated.length === 0) { setBatchFileExt(""); setSelectedFmt(""); } }} className="text-red-400 hover:text-red-600 text-[10px] font-bold">✕</button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div
+                onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
+                onDragLeave={() => setIsDragging(false)}
+                onDrop={handleDrop}
+                onClick={() => !file && inputRef.current?.click()}
+                className={`border-2 border-dashed rounded-2xl p-8 text-center transition-all ${
+                  file
+                    ? "border-emerald-400 bg-emerald-50/50 dark:bg-emerald-950/10 cursor-default"
+                    : isDragging
+                    ? "border-blue-400 bg-blue-50 dark:bg-blue-900/20 scale-[1.01] cursor-pointer"
+                    : "border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 hover:border-gray-400 dark:hover:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-800 cursor-pointer"
+                }`}
+              >
+                <input ref={inputRef} type="file" accept={ACCEPTED_EXTS}
+                  aria-label="Seleccionar archivo" className="hidden"
+                  onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFileSelect(f); }}
+                />
+                {file && inputInfo ? (
+                  <div className="flex flex-col items-center gap-3">
+                    <div className={`w-14 h-14 rounded-2xl border-2 flex items-center justify-center text-3xl flex-shrink-0 ${inputInfo.color}`}>
+                      {inputInfo.icon}
+                    </div>
+                    <div className="text-center w-full">
+                      <p className="font-bold text-sm text-gray-900 dark:text-white truncate max-w-xs mx-auto">{file.name}</p>
+                      <div className="flex items-center justify-center gap-2 mt-1.5 flex-wrap">
+                        <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border ${inputInfo.color}`}>{inputInfo.label}</span>
+                        <span className="text-[10px] text-gray-400">{(file.size / 1024).toFixed(1)} KB</span>
+                        <span className="text-[10px] text-emerald-600 font-medium">{available.length} formatos</span>
                       </div>
+                    </div>
+                    <button type="button"
+                      onClick={(e) => { e.stopPropagation(); setFile(null); setFileExt(""); setSelectedFmt(""); setResultFile(null); setAlert(null); }}
+                      className="mt-2 text-red-500 hover:text-red-700 text-xs font-semibold flex items-center gap-1"
+                    >✕ Cambiar archivo</button>
+                  </div>
+                ) : (
+                  <>
+                    <div className="text-4xl mb-2">📂</div>
+                    <p className="font-bold text-sm text-gray-700 dark:text-gray-200">Arrastra tu archivo aquí</p>
+                    <p className="text-xs text-gray-400 dark:text-gray-500 mt-1 max-w-xs mx-auto">PDF, Word, Excel, PowerPoint, Imágenes, TXT, HTML o CSV</p>
+                    <p className="text-[10px] text-gray-300 dark:text-gray-600 mt-2">o haz clic para explorar</p>
+                  </>
+                )}
+              </div>
+            )}
+
+            {/* Format Selector (File Mode) */}
+            {!isUrlMode && ((!isBatch && file && available.length > 0) || (isBatch && files.length > 0 && batchAvailable.length > 0)) && (
+              <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm p-5 space-y-4">
+                <p className="text-xs font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wide mb-1">
+                  Convertir a:
+                </p>
+                <div className="grid gap-2 grid-cols-3 sm:grid-cols-4 md:grid-cols-5">
+                  {(isBatch ? batchAvailable : available).map((fmt) => {
+                    const f = OUTPUT_FORMATS[fmt];
+                    if (!f) return null;
+                    const isSelected = selectedFmt === fmt;
+                    return (
+                      <button key={fmt} type="button" onClick={() => handleFormatChange(fmt)}
+                        className={`flex flex-col items-center p-2.5 rounded-xl border-2 transition-all text-center ${
+                          isSelected
+                            ? f.card + " shadow-sm scale-[1.04]"
+                            : "border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-500 dark:text-gray-400 hover:border-gray-300 dark:hover:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700 hover:shadow-sm"
+                        }`}
+                      >
+                        <span className="text-lg mb-0.5">{f.icon}</span>
+                        <span className="font-bold text-xs">{f.ext}</span>
+                        <span className="text-[9px] mt-0.5 opacity-60 leading-tight line-clamp-1">{f.description}</span>
+                      </button>
                     );
                   })}
                 </div>
               </div>
             )}
-          </div>
-        )}
 
-        {/* Format selector */}
-        {!isUrlMode && ((!isBatch && file && available.length > 0) || (isBatch && files.length > 0 && batchAvailable.length > 0)) && (
-          <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm p-6">
-            {/* From → To visual */}
-            <div className="flex items-center gap-3 mb-5">
-              <div className={`flex items-center gap-2 px-3 py-1.5 rounded-xl border text-sm font-bold ${(isBatch ? batchInputInfo : inputInfo)?.color ?? ""}`}>
-                {(isBatch ? batchInputInfo : inputInfo)?.icon} {(isBatch ? batchInputInfo?.label ?? batchFileExt.toUpperCase() : inputInfo?.label ?? fileExt.toUpperCase())}
-              </div>
-              <div className="flex-1 flex items-center gap-2 text-gray-300">
-                <div className="flex-1 h-px bg-gradient-to-r from-gray-200 to-emerald-300" />
-                <span className="text-xl">→</span>
-                <div className="flex-1 h-px bg-gradient-to-r from-emerald-300 to-gray-200" />
-              </div>
-              <div className={`flex items-center gap-2 px-3 py-1.5 rounded-xl border text-sm font-bold transition-all ${
-                selectedDef ? selectedDef.card : "border-gray-200 bg-gray-50 text-gray-400"
-              }`}>
-                {selectedDef ? <>{selectedDef.icon} {selectedDef.ext}</> : "Elige formato"}
-              </div>
-            </div>
+            {/* AI & Conversion Mode Selector Card */}
+            {((!isUrlMode && (file || (isBatch && files.length > 0))) || (isUrlMode && urlInput.trim())) && (
+              <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm p-5 space-y-4">
+                <div>
+                  <p className="text-xs font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-1">Modo de Conversión</p>
+                  <p className="text-[11px] text-gray-400 dark:text-gray-500">Conserva el formato o rediseña la información con IA de Claude</p>
+                </div>
 
-            <p className="text-xs text-gray-400 dark:text-gray-500 font-bold uppercase tracking-wide mb-3">
-              Convertir a: <span className="text-emerald-600">{(isBatch ? batchAvailable : available).length} opciones</span>
-            </p>
-
-            {/* Grid — auto-wraps to fill, max ~5 per row */}
-            <div className="grid gap-2 grid-cols-3 sm:grid-cols-5 md:grid-cols-6 lg:grid-cols-7">
-              {(isBatch ? batchAvailable : available).map((fmt) => {
-                const f = OUTPUT_FORMATS[fmt];
-                if (!f) return null;
-                const isSelected = selectedFmt === fmt;
-                return (
-                  <button key={fmt} type="button" onClick={() => handleFormatChange(fmt)}
-                    className={`flex flex-col items-center p-3 rounded-xl border-2 transition-all text-center ${
-                      isSelected
-                        ? f.card + " shadow-sm scale-[1.04]"
-                        : "border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-500 dark:text-gray-400 hover:border-gray-300 dark:hover:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700 hover:shadow-sm"
+                <div className="grid grid-cols-2 gap-3">
+                  <button
+                    type="button"
+                    onClick={() => { setConversionMode("visual"); handleResetPreviews(); }}
+                    className={`flex flex-col items-start p-3 rounded-xl border text-left transition-all ${
+                      conversionMode === "visual"
+                        ? "border-emerald-500 bg-emerald-50/50 dark:bg-emerald-950/20 text-emerald-800 dark:text-emerald-300 ring-2 ring-emerald-500/20"
+                        : "border-gray-200 dark:border-gray-800 text-gray-500 dark:text-gray-400 hover:border-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800"
                     }`}
                   >
-                    <span className="text-xl mb-1">{f.icon}</span>
-                    <span className="font-bold text-xs">{f.ext}</span>
-                    <span className="text-xs mt-0.5 opacity-60 leading-tight">{f.description}</span>
+                    <span className="text-lg mb-1">📄</span>
+                    <span className="font-bold text-xs">Original / Estándar</span>
+                    <span className="text-[9px] mt-1 opacity-80 leading-tight">Captura y formato original</span>
                   </button>
-                );
-              })}
+
+                  <button
+                    type="button"
+                    onClick={() => { setConversionMode("ai"); }}
+                    className={`flex flex-col items-start p-3 rounded-xl border text-left transition-all ${
+                      conversionMode === "ai"
+                        ? "border-purple-500 bg-purple-50/50 dark:bg-purple-950/20 text-purple-800 dark:text-purple-300 ring-2 ring-purple-500/20"
+                        : "border-gray-200 dark:border-gray-800 text-gray-500 dark:text-gray-400 hover:border-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800"
+                    }`}
+                  >
+                    <span className="text-lg mb-1">✨</span>
+                    <span className="font-bold text-xs">Rediseño con IA</span>
+                    <span className="text-[9px] mt-1 opacity-80 leading-tight">Optimizado con Claude AI</span>
+                  </button>
+                </div>
+
+                {conversionMode === "ai" && (
+                  <div className="pt-3 border-t border-gray-100 dark:border-gray-800 space-y-3">
+                    <div>
+                      <label htmlFor="ai-style-select" className="block text-[11px] font-bold text-gray-500 dark:text-gray-400 mb-1.5">
+                        Estilo de Rediseño Inteligente
+                      </label>
+                      <select
+                        id="ai-style-select"
+                        value={aiPrompt}
+                        onChange={(e) => {
+                          setAiPrompt(e.target.value as "summary" | "formal" | "translation" | "brief");
+                          handleResetPreviews();
+                        }}
+                        className="w-full px-3 py-2 rounded-xl border border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-gray-800 text-xs font-semibold text-gray-800 dark:text-gray-200 focus:outline-none focus:ring-2 focus:ring-purple-300"
+                      >
+                        <option value="summary">📋 Resumen Ejecutivo</option>
+                        <option value="formal">👔 Reporte Corporativo Profesional</option>
+                        <option value="translation">🌍 Traducción Fluida al Español</option>
+                        <option value="brief">💡 Briefing de Negocios y Datos</option>
+                      </select>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={handleGeneratePreview}
+                      disabled={isPreviewLoading || (isUrlMode ? !urlInput.trim() : !file)}
+                      className={`w-full py-2.5 rounded-xl font-bold text-xs text-white shadow-sm flex items-center justify-center gap-1.5 transition-all ${
+                        isPreviewLoading
+                          ? "bg-purple-400 dark:bg-purple-600 cursor-not-allowed"
+                          : (isUrlMode ? !urlInput.trim() : !file)
+                          ? "bg-gray-300 dark:bg-gray-800 text-gray-400 dark:text-gray-600 cursor-not-allowed"
+                          : "bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 active:scale-[0.98]"
+                      }`}
+                    >
+                      {isPreviewLoading ? (
+                        <>
+                          <svg className="animate-spin h-3.5 w-3.5 text-white" viewBox="0 0 24 24" fill="none">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/>
+                          </svg>
+                          Generando previsualización...
+                        </>
+                      ) : (
+                        <>✨ Generar Vista Previa con IA</>
+                      )}
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Supported types summary banner */}
+            <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm p-4">
+              <p className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-2.5">Formatos Compatibles</p>
+              <div className="flex flex-wrap gap-1.5">
+                {INPUT_CATEGORIES.map((cat) => (
+                  <div key={cat.label} className={`flex items-center gap-1 px-2 py-1 rounded-lg border text-[10px] font-semibold ${cat.color}`}>
+                    <span className="font-bold">{cat.label}:</span>
+                    {cat.exts.slice(0, 3).map((e) => (
+                      <span key={e} className="opacity-80">.{e.toUpperCase()}</span>
+                    ))}
+                    {cat.exts.length > 3 && <span className="opacity-50">+</span>}
+                  </div>
+                ))}
+              </div>
             </div>
+
           </div>
-        )}
 
-        {/* Batch progress bar */}
+          {/* RIGHT COLUMN: INTERACTIVE PREVIEW & ACTION BAR (lg:col-span-7) */}
+          <div className="lg:col-span-7 lg:sticky lg:top-5 space-y-5">
+            
+            {/* Main Visor Card */}
+            <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm overflow-hidden flex flex-col min-h-[460px] max-h-[640px]">
+              
+              {/* Visor Header */}
+              <div className="bg-gray-50 dark:bg-gray-900/50 border-b border-gray-100 dark:border-gray-800 px-4 py-3 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="flex h-2.5 w-2.5 relative">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
+                  </span>
+                  <p className="text-xs font-black text-gray-700 dark:text-gray-300">
+                    {conversionMode === "ai" ? "✨ Panel de Vista Previa Inteligente (IA)" : "🖥️ Panel de Vista Previa de Entrada"}
+                  </p>
+                </div>
+                
+                <div className="flex items-center gap-1">
+                  <div className="w-2.5 h-2.5 rounded-full bg-red-400/80" />
+                  <div className="w-2.5 h-2.5 rounded-full bg-yellow-400/80" />
+                  <div className="w-2.5 h-2.5 rounded-full bg-green-400/80" />
+                </div>
+              </div>
 
-        {batchProgress && (
-          <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm p-4">
-            <div className="flex items-center justify-between mb-2 text-sm font-medium text-gray-700 dark:text-gray-300">
-              <span>Convirtiendo archivos...</span>
-              <span className="text-emerald-600 font-bold">{batchProgress.done} / {batchProgress.total}</span>
+              {/* Visor Body (Scrollable container) */}
+              <div className="flex-1 p-5 overflow-y-auto bg-gray-50/50 dark:bg-gray-950/20 scrollbar-thin scrollbar-thumb-rounded">
+                
+                {isPreviewLoading ? (
+                  <div className="h-full flex flex-col items-center justify-center py-20 space-y-4">
+                    <div className="relative w-16 h-16 flex items-center justify-center">
+                      <div className="absolute inset-0 border-4 border-purple-200 dark:border-purple-950 rounded-full animate-spin border-t-purple-600" />
+                      <span className="text-2xl animate-pulse">✨</span>
+                    </div>
+                    <div className="text-center space-y-1">
+                      <p className="text-sm font-bold text-gray-700 dark:text-gray-300">Claude está estructurando tu información</p>
+                      <p className="text-xs text-gray-400">Analizando el texto del documento original...</p>
+                    </div>
+                  </div>
+                ) : previewError ? (
+                  <div className="h-full flex flex-col items-center justify-center py-20 text-center space-y-3">
+                    <span className="text-4xl">⚠️</span>
+                    <div className="space-y-1">
+                      <p className="text-sm font-bold text-red-600 dark:text-red-400">Error al procesar</p>
+                      <p className="text-xs text-gray-400 max-w-xs">{previewError}</p>
+                    </div>
+                    <button type="button" onClick={handleGeneratePreview} className="px-4 py-2 bg-gray-200 dark:bg-gray-800 text-gray-700 dark:text-gray-300 text-xs font-bold rounded-lg hover:bg-gray-300 transition-all">Reintentar</button>
+                  </div>
+                ) : conversionMode === "ai" && previewText ? (
+                  /* A4-Simulated glass paper */
+                  <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 shadow-md rounded-xl p-6 md:p-8 min-h-full transition-all animate-fadeIn">
+                    <div className="border-b border-gray-100 dark:border-gray-800 pb-3 mb-4 flex items-center justify-between text-xs text-gray-400">
+                      <span className="font-semibold tracking-wider uppercase text-purple-600">Rediseño Claude AI</span>
+                      <span>Estilo: {aiPrompt === "summary" ? "Resumen" : aiPrompt === "formal" ? "Corporativo" : aiPrompt === "translation" ? "Traducción" : "Briefing"}</span>
+                    </div>
+                    <MarkdownPreview text={previewText} />
+                  </div>
+                ) : conversionMode === "ai" ? (
+                  /* AI Mode placeholder */
+                  <div className="h-full flex flex-col items-center justify-center py-20 text-center space-y-4">
+                    <div className="w-16 h-16 bg-purple-50 dark:bg-purple-950/20 rounded-2xl flex items-center justify-center text-3xl shadow-inner text-purple-600">✨</div>
+                    <div className="space-y-1.5 max-w-xs">
+                      <p className="text-sm font-black text-gray-800 dark:text-gray-200">Rediseño con IA Activo</p>
+                      <p className="text-xs text-gray-400 leading-relaxed">
+                        Presiona el botón <strong className="text-purple-600">&quot;Generar Vista Previa con IA&quot;</strong> en el panel izquierdo para ver el documento optimizado en tiempo real antes de compilarlo.
+                      </p>
+                    </div>
+                  </div>
+                ) : isUrlMode ? (
+                  /* Standard Visual Mode (URL) */
+                  <div className="h-full flex flex-col justify-between min-h-[350px]">
+                    {urlInput.trim() ? (
+                      <div className="border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 rounded-xl overflow-hidden shadow-md flex-1 flex flex-col">
+                        {/* Simulated Browser Bar */}
+                        <div className="bg-gray-100 dark:bg-gray-800/80 px-3 py-2 flex items-center gap-2 border-b border-gray-200 dark:border-gray-800 text-[10px] text-gray-400">
+                          <span className="px-2 py-0.5 bg-white dark:bg-gray-700 rounded border border-gray-200 dark:border-gray-600 text-green-600 flex items-center gap-0.5">🔒 HTTPS</span>
+                          <span className="font-mono truncate">{urlInput}</span>
+                        </div>
+                        {/* Browser Content Simulated */}
+                        <div className="flex-1 flex flex-col items-center justify-center p-8 bg-gray-50/50 dark:bg-gray-950/30 text-center space-y-3">
+                          <div className="text-4xl">🌐</div>
+                          <p className="text-sm font-bold text-gray-700 dark:text-gray-300">Captura Visual Web</p>
+                          <p className="text-xs text-gray-400 max-w-xs leading-normal">
+                            La página se convertirá a <strong className="text-blue-500 font-bold">{urlFmt.toUpperCase()}</strong> capturando la hoja de estilos y el diseño visual de la web tal como aparece en pantalla.
+                          </p>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="h-full flex flex-col items-center justify-center py-20 text-center space-y-3">
+                        <div className="text-4xl opacity-55">🔗</div>
+                        <p className="text-sm font-bold text-gray-700 dark:text-gray-300">Esperando Enlace URL</p>
+                        <p className="text-xs text-gray-400 max-w-xs leading-normal">
+                          Ingresa una URL a la izquierda para habilitar la previsualización y las opciones de compilación.
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  /* Standard Visual Mode (File) */
+                  <div className="h-full flex flex-col justify-between min-h-[350px]">
+                    {file ? (
+                      <div className="border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 rounded-xl p-6 shadow-md flex-1 flex flex-col justify-between">
+                        <div className="space-y-4">
+                          <div className="flex items-center gap-3 border-b border-gray-100 dark:border-gray-800 pb-3">
+                            <span className="text-3xl">📁</span>
+                            <div className="flex-1 overflow-hidden">
+                              <p className="text-xs font-bold text-gray-400 uppercase tracking-wide">Documento cargado</p>
+                              <p className="text-sm font-bold text-gray-800 dark:text-gray-200 truncate">{file.name}</p>
+                            </div>
+                          </div>
+                          
+                          <div className="space-y-2 text-xs">
+                            <div className="flex justify-between py-1 border-b border-gray-50 dark:border-gray-800/40">
+                              <span className="text-gray-400">Tamaño original:</span>
+                              <span className="font-semibold text-gray-700 dark:text-gray-300">{(file.size / 1024).toFixed(1)} KB</span>
+                            </div>
+                            <div className="flex justify-between py-1 border-b border-gray-50 dark:border-gray-800/40">
+                              <span className="text-gray-400">Extensión:</span>
+                              <span className="font-mono font-bold text-emerald-600">.{fileExt.toUpperCase()}</span>
+                            </div>
+                            {selectedFmt && (
+                              <div className="flex justify-between py-1 border-b border-gray-50 dark:border-gray-800/40">
+                                <span className="text-gray-400">Formato destino:</span>
+                                <span className="font-bold text-purple-600">.{selectedFmt.toUpperCase()}</span>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="p-3 bg-emerald-50 dark:bg-emerald-950/20 border border-emerald-100 dark:border-emerald-900/30 rounded-xl text-[11px] text-emerald-800 dark:text-emerald-300 flex items-center gap-2">
+                          <span>⚡</span>
+                          <p>Conversión directa y de alta velocidad lista para compilar.</p>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="h-full flex flex-col items-center justify-center py-20 text-center space-y-3">
+                        <div className="text-4xl opacity-55">📂</div>
+                        <p className="text-sm font-bold text-gray-700 dark:text-gray-300">Esperando archivo de entrada</p>
+                        <p className="text-xs text-gray-400 max-w-xs leading-normal">
+                          Arrastra o carga un documento a la izquierda para activar los formatos y los visores inteligentes.
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+              </div>
+
             </div>
-            <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2.5 overflow-hidden">
-              <div
-                className="h-2.5 bg-gradient-to-r from-emerald-500 to-teal-400 rounded-full transition-all duration-300 [width:var(--progress)]"
-                // @ts-expect-error CSS custom property
-                style={{ "--progress": `${(batchProgress.done / batchProgress.total) * 100}%` }}
-              />
-            </div>
-            <p className="text-xs text-gray-400 mt-1.5">
-              {batchProgress.done < batchProgress.total
-                ? `Procesando archivo ${batchProgress.done + 1}...`
-                : "Finalizando..."}
-            </p>
-          </div>
-        )}
 
-        {/* Alert */}
-        {alert && (
-          <div className={`p-3 rounded-xl text-sm font-medium border ${
-            alert.type === "success"
-              ? "bg-green-100 text-green-700 border-green-200"
-              : "bg-red-100 text-red-700 border-red-200"
-          }`}>
-            {alert.text}
-          </div>
-        )}
+            {/* Batch progress */}
+            {batchProgress && (
+              <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm p-4">
+                <div className="flex items-center justify-between mb-2 text-sm font-medium text-gray-700 dark:text-gray-300">
+                  <span>Convirtiendo archivos...</span>
+                  <span className="text-emerald-600 font-bold">{batchProgress.done} / {batchProgress.total}</span>
+                </div>
+                <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2.5 overflow-hidden">
+                  <div
+                    className="h-2.5 bg-gradient-to-r from-emerald-500 to-teal-400 rounded-full transition-all duration-300 [width:var(--progress)]"
+                    // @ts-expect-error CSS custom property
+                    style={{ "--progress": `${(batchProgress.done / batchProgress.total) * 100}%` }}
+                  />
+                </div>
+                <p className="text-xs text-gray-400 mt-1.5">
+                  {batchProgress.done < batchProgress.total
+                    ? `Procesando archivo ${batchProgress.done + 1}...`
+                    : "Finalizando..."}
+                </p>
+              </div>
+            )}
 
-        {/* Action bar */}
-        <div className="flex flex-wrap gap-3">
-          {isUrlMode ? (
-            <button type="button" onClick={handleUrlConvert}
-              disabled={!urlInput.trim() || isLoading}
-              className={`flex-1 py-4 rounded-2xl font-bold text-white text-base transition-all shadow-md ${
-                !urlInput.trim() || isLoading
-                  ? "bg-gray-300 cursor-not-allowed"
-                  : (URL_FORMATS.find((f) => f.fmt === urlFmt)?.btn ?? "bg-blue-600 hover:bg-blue-700")
-              }`}
-            >
-              {isLoading ? (
-                <span className="flex items-center justify-center gap-2">
-                  <svg className="animate-spin h-5 w-5" viewBox="0 0 24 24" fill="none">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/>
-                  </svg>
-                  Convirtiendo URL a {urlFmt.toUpperCase()}...
-                </span>
+            {/* Alerts inside right panel for prominence */}
+            {alert && (
+              <div className={`p-3.5 rounded-xl text-xs font-semibold border ${
+                alert.type === "success"
+                  ? "bg-green-50 text-green-700 border-green-200 dark:bg-green-950/20 dark:text-green-300 dark:border-green-900/30"
+                  : "bg-red-50 text-red-700 border-red-200 dark:bg-red-950/20 dark:text-red-300 dark:border-red-900/30"
+              }`}>
+                {alert.text}
+              </div>
+            )}
+
+            {/* Bottom Actions Frame */}
+            <div className="flex flex-wrap gap-3 bg-white dark:bg-gray-900 p-4 border border-gray-100 dark:border-gray-800 rounded-2xl shadow-sm">
+              
+              {isUrlMode ? (
+                <button type="button" onClick={handleUrlConvert}
+                  disabled={!urlInput.trim() || isLoading}
+                  className={`flex-1 py-3.5 rounded-xl font-bold text-white text-sm transition-all shadow-sm ${
+                    !urlInput.trim() || isLoading
+                      ? "bg-gray-300 dark:bg-gray-800 text-gray-400 dark:text-gray-600 cursor-not-allowed"
+                      : (URL_FORMATS.find((f) => f.fmt === urlFmt)?.btn ?? "bg-blue-600 hover:bg-blue-700")
+                  }`}
+                >
+                  {isLoading ? (
+                    <span className="flex items-center justify-center gap-2">
+                      <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/>
+                      </svg>
+                      Procesando URL...
+                    </span>
+                  ) : (
+                    `${URL_FORMATS.find((f) => f.fmt === urlFmt)?.icon ?? "🔗"}  Compilar y Descargar`
+                  )}
+                </button>
               ) : (
-                `${URL_FORMATS.find((f) => f.fmt === urlFmt)?.icon ?? "🔗"}  Convertir URL a ${urlFmt.toUpperCase()}`
+                <button type="button" onClick={handleConvert}
+                  disabled={(isBatch ? files.length === 0 : !file) || !selectedFmt || isLoading}
+                  className={`flex-1 py-3.5 rounded-xl font-bold text-white text-sm transition-all shadow-sm ${
+                    (isBatch ? files.length === 0 : !file) || !selectedFmt || isLoading
+                      ? "bg-gray-300 dark:bg-gray-800 text-gray-400 dark:text-gray-600 cursor-not-allowed"
+                      : (selectedDef?.btn ?? "bg-gray-600 hover:bg-gray-700")
+                  }`}
+                >
+                  {isLoading ? (
+                    <span className="flex items-center justify-center gap-2">
+                      <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/>
+                      </svg>
+                      {isBatch && batchProgress ? `Procesando ${batchProgress.done + 1}/${batchProgress.total}...` : `Procesando...`}
+                    </span>
+                  ) : selectedFmt ? (
+                    isBatch
+                      ? `${selectedDef?.icon ?? "🔄"}  Compilar ${files.length} archivos`
+                      : `${selectedDef?.icon ?? "🔄"}  Compilar y Descargar`
+                  ) : (
+                    "Selecciona un formato"
+                  )}
+                </button>
               )}
-            </button>
-          ) : (
-            <button type="button" onClick={handleConvert}
-              disabled={(isBatch ? files.length === 0 : !file) || !selectedFmt || isLoading}
-              className={`flex-1 py-4 rounded-2xl font-bold text-white text-base transition-all shadow-md ${
-                (isBatch ? files.length === 0 : !file) || !selectedFmt || isLoading
-                  ? "bg-gray-300 cursor-not-allowed"
-                  : (selectedDef?.btn ?? "bg-gray-600 hover:bg-gray-700")
-              }`}
-            >
-              {isLoading ? (
-                <span className="flex items-center justify-center gap-2">
-                  <svg className="animate-spin h-5 w-5" viewBox="0 0 24 24" fill="none">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/>
-                  </svg>
-                  {isBatch && batchProgress ? `Convirtiendo ${batchProgress.done + 1}/${batchProgress.total}...` : `Convirtiendo a ${selectedDef?.ext ?? selectedFmt.toUpperCase()}...`}
-                </span>
-              ) : selectedFmt ? (
-                isBatch
-                  ? `${selectedDef?.icon ?? "🔄"}  Convertir ${files.length} archivo${files.length !== 1 ? "s" : ""} a ${selectedDef?.ext ?? selectedFmt.toUpperCase()}`
-                  : `${selectedDef?.icon ?? "🔄"}  Convertir a ${selectedDef?.ext ?? selectedFmt.toUpperCase()}`
-              ) : (
-                "Selecciona un formato de salida"
-              )}
-            </button>
-          )}
 
-          {resultFile && (
-            <>
-              <a href={`${API_URL}/download/${resultFile}${friendlyName ? `?name=${encodeURIComponent(friendlyName)}` : ""}`} download={friendlyName ?? resultFile ?? undefined}
-                className="flex items-center gap-2 px-6 py-4 bg-gradient-to-br from-gray-800 to-gray-900 hover:from-gray-700 hover:to-gray-800 text-white rounded-2xl font-bold transition-all shadow-md whitespace-nowrap"
-              >
-                ⬇ Descargar
-              </a>
-              <button type="button" onClick={shareGate.guard(handleShare)}
-                className="flex items-center gap-2 px-5 py-4 bg-blue-600 hover:bg-blue-700 text-white rounded-2xl font-bold transition-all shadow-md whitespace-nowrap"
-                title="Copiar enlace para compartir"
-              >
-                {isCopied ? "✅ Copiado" : (!mounted || !canUse("share")) ? "👑 Compartir" : "🔗 Compartir"}
-              </button>
-            </>
-          )}
+              {resultFile && (
+                <div className="flex gap-2 w-full sm:w-auto">
+                  <a href={`${API_URL}/download/${resultFile}${friendlyName ? `?name=${encodeURIComponent(friendlyName)}` : ""}`} download={friendlyName ?? resultFile ?? undefined}
+                    className="flex-1 sm:flex-initial flex items-center justify-center gap-1.5 px-5 py-3.5 bg-gradient-to-br from-gray-800 to-gray-900 hover:from-gray-700 hover:to-gray-800 text-white rounded-xl font-bold text-xs transition-all shadow-sm whitespace-nowrap"
+                  >
+                    ⬇ Descargar
+                  </a>
+                  <button type="button" onClick={shareGate.guard(handleShare)}
+                    className="flex-1 sm:flex-initial flex items-center justify-center gap-1.5 px-4 py-3.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold text-xs transition-all shadow-sm whitespace-nowrap"
+                    title="Copiar enlace de descarga para compartir"
+                  >
+                    {isCopied ? "✅ Copiado" : (!mounted || !canUse("share")) ? "👑 Enlace" : "🔗 Enlace"}
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {shareUrl && (
+              <div className="p-3 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-xl text-xs text-blue-700 dark:text-blue-300 break-all">
+                <span className="font-bold">Enlace: </span>{shareUrl}
+              </div>
+            )}
+
+            {/* Visual outputs/images preview */}
+            {resultFile && ["jpg","jpeg","png","webp","bmp","gif","tiff","ico"].includes(isUrlMode ? urlFmt : selectedFmt) && (
+              <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm p-4">
+                <p className="text-xs font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-3">Vista previa</p>
+                <img
+                  src={`${API_URL}/download/${resultFile}`}
+                  alt="Vista previa del resultado"
+                  className="max-h-64 mx-auto rounded-xl object-contain border border-gray-100 dark:border-gray-700"
+                />
+              </div>
+            )}
+
+          </div>
         </div>
-
-        {shareUrl && (
-          <div className="p-3 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-xl text-xs text-blue-700 dark:text-blue-300 break-all">
-            <span className="font-bold">Enlace: </span>{shareUrl}
-          </div>
-        )}
-
-        {/* Preview */}
-        {resultFile && ["jpg","jpeg","png","webp","bmp","gif","tiff","ico"].includes(isUrlMode ? urlFmt : selectedFmt) && (
-          <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm p-4">
-            <p className="text-xs font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-3">Vista previa</p>
-            <img
-              src={`${API_URL}/download/${resultFile}`}
-              alt="Vista previa del resultado"
-              className="max-h-64 mx-auto rounded-xl object-contain border border-gray-100 dark:border-gray-700"
-            />
-          </div>
-        )}
       </div>
     </div>
   );

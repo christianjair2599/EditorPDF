@@ -583,10 +583,148 @@ async def upload_pdf(file: UploadFile = File(...)):
     return {"message": "Archivo subido con éxito", "filename": file.filename, "file_path": path}
 
 
+def extract_raw_text_from_file(input_file: str, ext: str) -> str:
+    ext = ext.lower().lstrip(".")
+    if ext == "pdf":
+        import fitz
+        doc = fitz.open(input_file)
+        text = "\n".join(page.get_text() for page in doc)
+        doc.close()
+        return text
+    elif ext in ("docx", "doc"):
+        from docx import Document
+        docx = Document(input_file)
+        return "\n".join(p.text for p in docx.paragraphs)
+    elif ext == "txt":
+        with open(input_file, "r", encoding="utf-8", errors="replace") as f:
+            return f.read()
+    elif ext in ("html", "htm"):
+        from bs4 import BeautifulSoup
+        with open(input_file, "r", encoding="utf-8", errors="replace") as f:
+            soup = BeautifulSoup(f.read(), "html.parser")
+            return soup.get_text(separator="\n")
+    else:
+        return ""
+
+def compile_text_structure_to_pdf(text: str, output_path: str, title: str = "Reporte de IA"):
+    from reportlab.lib.pagesizes import letter
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib import colors
+    from reportlab.lib.enums import TA_LEFT, TA_CENTER, TA_RIGHT, TA_JUSTIFY
+
+    doc = SimpleDocTemplate(
+        output_path, 
+        pagesize=letter,
+        leftMargin=45, 
+        rightMargin=45, 
+        topMargin=45, 
+        bottomMargin=45
+    )
+    
+    styles = getSampleStyleSheet()
+    styles_cache = {"Normal": styles["Normal"]}
+    
+    story = []
+    
+    # 1. Header (Title of Page and Source Link)
+    title_style = ParagraphStyle(
+        name="RepTitle",
+        parent=styles["Normal"],
+        fontName="Helvetica-Bold",
+        fontSize=18,
+        leading=22,
+        textColor=colors.HexColor("#1e3a5f"),
+        spaceAfter=15
+    )
+    story.append(Paragraph(safe_text(title), title_style))
+    story.append(Spacer(1, 10))
+    
+    for line in text.split("\n"):
+        line_str = line.strip()
+        if not line_str:
+            story.append(Spacer(1, 8))
+            continue
+            
+        tag = "p"
+        bold = False
+        left_indent = 0
+        font_size = 11
+        leading = 14
+        textColor = colors.HexColor("#333333")
+        space_before = 0
+        space_after = 6
+        
+        # Clean markdown-like tags
+        if line_str.startswith("###"):
+            line_str = line_str.lstrip("#").strip()
+            tag = "h3"
+            font_size = 13
+            leading = 16
+            bold = True
+            space_before = 8
+            space_after = 4
+        elif line_str.startswith("##"):
+            line_str = line_str.lstrip("#").strip()
+            tag = "h2"
+            font_size = 15
+            leading = 18
+            bold = True
+            textColor = colors.HexColor("#2c3e50")
+            space_before = 10
+            space_after = 5
+        elif line_str.startswith("#"):
+            line_str = line_str.lstrip("#").strip()
+            tag = "h1"
+            font_size = 18
+            leading = 22
+            bold = True
+            textColor = colors.HexColor("#1e3a5f")
+            space_before = 12
+            space_after = 6
+        elif line_str.startswith(("-", "*", "•")):
+            line_str = line_str.lstrip("-*•").strip()
+            tag = "li"
+            left_indent = 15
+            line_str = "&bull;&nbsp;&nbsp;" + line_str
+            space_after = 3
+            
+        line_str = re.sub(r"\*\*(.*?)\*\*", r"<b>\1</b>", line_str)
+        line_str = re.sub(r"\*(.*?)\*", r"<i>\1</i>", line_str)
+        
+        escaped = line_str if "<b>" in line_str or "<i>" in line_str or "&bull;" in line_str else safe_text(line_str)
+        
+        style_key = f"AI_{tag}_{bold}_{left_indent}"
+        if style_key not in styles_cache:
+            r_style = ParagraphStyle(
+                name=f"Style_{style_key}_{len(styles_cache)}",
+                parent=styles["Normal"],
+                fontName="Helvetica-Bold" if bold else "Helvetica",
+                fontSize=font_size,
+                leading=leading,
+                textColor=textColor,
+                leftIndent=left_indent,
+                spaceBefore=space_before,
+                spaceAfter=space_after
+            )
+            styles_cache[style_key] = r_style
+        else:
+            r_style = styles_cache[style_key]
+            
+        story.append(Paragraph(escaped, r_style))
+        
+    if not story:
+        story.append(Paragraph("(Sin contenido)", styles["Normal"]))
+        
+    doc.build(story)
+
+
 @app.post("/convert-any/")
 async def convert_any(
     file: UploadFile = File(...),
     output_format: str = Form(...),
+    conversion_mode: str = Form("visual"),
+    ai_prompt: str = Form("summary"),
     x_user_email: str = Header(None, alias="X-User-Email")
 ):
     cleanup_old_files()
@@ -630,6 +768,40 @@ async def convert_any(
     output_file = None
 
     try:
+        # ── AI Optimized Redesign for files ──────────────────────────────────
+        if conversion_mode == "ai" and fmt == "pdf":
+            raw_text = extract_raw_text_from_file(input_file, src)
+            if not raw_text.strip():
+                return JSONResponse({"error": "No se pudo extraer texto del archivo cargado para procesar con IA."}, status_code=400)
+                
+            api_key = os.getenv("ANTHROPIC_API_KEY")
+            if not api_key:
+                return JSONResponse({"error": "ANTHROPIC_API_KEY no configurada en el servidor."}, status_code=500)
+                
+            prompt_instructions = "Por favor, analiza el contenido del siguiente documento y reescríbelo como un Resumen Ejecutivo de lectura limpia, estructurado con títulos claros, subtítulos y viñetas elegantes."
+            if ai_prompt == "formal":
+                prompt_instructions = "Por favor, analiza el contenido del siguiente documento y reescríbelo como un Reporte Profesional formal y altamente corporativo, ordenando los puntos clave y redactando de forma elocuente."
+            elif ai_prompt == "translation":
+                prompt_instructions = "Por favor, traduce el contenido del siguiente documento al Español de forma fluida y profesional, organizando el texto con títulos y párrafos bien estructurados."
+            elif ai_prompt == "brief":
+                prompt_instructions = "Por favor, analiza el contenido del siguiente documento y redacta un Briefing Analítico conciso, enfocado en las principales ideas de negocio, datos clave y conclusiones accionables."
+                
+            try:
+                import anthropic
+                client = anthropic.Anthropic(api_key=api_key)
+                response = client.messages.create(
+                    model="claude-haiku-4-5-20251001",
+                    max_tokens=2048,
+                    messages=[{"role": "user", "content": f"{prompt_instructions}\n\nAquí está el contenido original del documento:\n\n{raw_text[:6000]}"}],
+                )
+                ai_result_text = response.content[0].text
+                output_file = f"{base}.pdf"
+                compile_text_structure_to_pdf(ai_result_text, output_file, title=f"Reporte IA - {original_name}")
+                friendly_name = f"{original_name}.pdf"
+                return {"message": "Conversión exitosa", "output_file": os.path.basename(output_file), "friendly_name": friendly_name}
+            except Exception as e:
+                return JSONResponse({"error": f"Error al procesar con IA: {str(e)}"}, status_code=500)
+
         # ── PDF → * ───────────────────────────────────────────────────────────
         if src == "pdf":
             if fmt == "docx":
@@ -1360,7 +1532,12 @@ def url_to_pdf_high_fidelity(url: str, soup, output_path: str):
 
 # ── URL → PDF / Image / TXT / HTML ───────────────────────────────────────────
 @app.post("/url-to-pdf/")
-async def url_to_format(url: str = Form(...), output_format: str = Form("pdf")):
+async def url_to_format(
+    url: str = Form(...),
+    output_format: str = Form("pdf"),
+    conversion_mode: str = Form("visual"),
+    ai_prompt: str = Form("summary")
+):
     import re as _re
     import requests as _req
     from bs4 import BeautifulSoup
@@ -1390,18 +1567,49 @@ async def url_to_format(url: str = Form(...), output_format: str = Form("pdf")):
 
         if fmt in ("pdf", "png", "jpg", "jpeg"):
             pdf_path = os.path.join(UPLOAD_DIR, f"{file_id}_tmp.pdf")
-            try:
-                from urllib.parse import quote
-                microlink_url = f"https://api.microlink.io/?url={quote(url)}&pdf=true&embed=pdf.url"
-                api_resp = _req.get(microlink_url, timeout=35)
-                if api_resp.status_code == 200 and len(api_resp.content) > 1000:
-                    with open(pdf_path, "wb") as f:
-                        f.write(api_resp.content)
-                else:
-                    raise Exception(f"Microlink returned status {api_resp.status_code}")
-            except Exception as e:
-                print(f"Microlink print failed, falling back to local layout engine: {e}")
+            
+            if conversion_mode == "ai":
+                api_key = os.getenv("ANTHROPIC_API_KEY")
+                if not api_key:
+                    return JSONResponse({"error": "ANTHROPIC_API_KEY no configurada en el servidor."}, status_code=500)
+                
+                prompt_instructions = "Por favor, analiza el contenido de la siguiente página web y reescríbelo como un Resumen Ejecutivo de lectura limpia, estructurado con títulos claros, subtítulos y viñetas elegantes."
+                if ai_prompt == "formal":
+                    prompt_instructions = "Por favor, analiza el contenido de la siguiente página web y reescríbelo como un Reporte Profesional formal y altamente corporativo, ordenando los puntos clave y redactando de forma elocuente."
+                elif ai_prompt == "translation":
+                    prompt_instructions = "Por favor, traduce el contenido de la siguiente página web al Español de forma fluida y profesional, organizando el texto con títulos y párrafos bien estructurados."
+                elif ai_prompt == "brief":
+                    prompt_instructions = "Por favor, analiza el contenido de la siguiente página web y redacta un Briefing Analítico conciso, enfocado en las principales ideas de negocio, datos clave y conclusiones accionables."
+                    
+                try:
+                    import anthropic
+                    client = anthropic.Anthropic(api_key=api_key)
+                    response = client.messages.create(
+                        model="claude-haiku-4-5-20251001",
+                        max_tokens=2048,
+                        messages=[{"role": "user", "content": f"{prompt_instructions}\n\nAquí está el contenido original del sitio web:\n\n{plain_text[:6000]}"}],
+                    )
+                    ai_result_text = response.content[0].text
+                    compile_text_structure_to_pdf(ai_result_text, pdf_path, title=title)
+                except Exception as e:
+                    return JSONResponse({"error": f"Error de IA: {str(e)}"}, status_code=500)
+            
+            elif conversion_mode == "clean":
                 url_to_pdf_high_fidelity(url, soup, pdf_path)
+                
+            else: # conversion_mode == "visual"
+                try:
+                    from urllib.parse import quote
+                    microlink_url = f"https://api.microlink.io/?url={quote(url)}&pdf=true&embed=pdf.url"
+                    api_resp = _req.get(microlink_url, timeout=35)
+                    if api_resp.status_code == 200 and len(api_resp.content) > 1000:
+                        with open(pdf_path, "wb") as f:
+                            f.write(api_resp.content)
+                    else:
+                        raise Exception(f"Microlink returned status {api_resp.status_code}")
+                except Exception as e:
+                    print(f"Microlink print failed, falling back to local layout engine: {e}")
+                    url_to_pdf_high_fidelity(url, soup, pdf_path)
 
             if fmt == "pdf":
                 out_path = pdf_path
@@ -2441,3 +2649,100 @@ async def support_chat(req: SupportChatRequest):
         return {"reply": reply}
     except Exception as e:
         return {"reply": f"Lo siento, he tenido un inconveniente técnico al procesar tu solicitud: {str(e)}"}
+
+
+@app.post("/url-to-pdf/preview/")
+async def url_to_pdf_preview(
+    url: str = Form(...),
+    ai_prompt: str = Form("summary"),
+    x_user_email: str = Header(None, alias="X-User-Email")
+):
+    import re as _re
+    import requests as _req
+    from bs4 import BeautifulSoup
+    
+    if not _re.match(r"^https?://", url):
+        return JSONResponse({"error": "URL inválida."}, status_code=400)
+        
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+    try:
+        resp = _req.get(url, timeout=20, headers=headers)
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "html.parser")
+        for tag in soup(["script", "style", "nav", "footer", "iframe", "noscript"]):
+            tag.decompose()
+            
+        paragraphs = [soup.title.string.strip() if soup.title and soup.title.string else url, ""]
+        for el in soup.find_all(["h1","h2","h3","h4","p","li","blockquote"]):
+            t = el.get_text(strip=True)
+            if t:
+                paragraphs.append(t)
+        plain_text = "\n".join(paragraphs)
+        
+        api_key = os.getenv("ANTHROPIC_API_KEY")
+        if not api_key:
+            return {"preview": f"[Claude AI Preview Mode] (Nota: ANTHROPIC_API_KEY no configurada)\n\nContenido extraído:\n{plain_text[:800]}"}
+            
+        prompt_instructions = "Por favor, analiza el contenido de la siguiente página web y reescríbelo como un Resumen Ejecutivo de lectura limpia, estructurado con títulos claros, subtítulos y viñetas elegantes. Responde en Español."
+        if ai_prompt == "formal":
+            prompt_instructions = "Por favor, analiza el contenido de la siguiente página web y reescríbelo como un Reporte Profesional formal y altamente corporativo, ordenando los puntos clave y redactando de forma elocuente. Responde en Español."
+        elif ai_prompt == "translation":
+            prompt_instructions = "Por favor, traduce el contenido de la siguiente página web al Español de forma fluida y profesional, organizando el texto con títulos y párrafos bien estructurados."
+        elif ai_prompt == "brief":
+            prompt_instructions = "Por favor, analiza el contenido de la siguiente página web y redacta un Briefing Analítico conciso, enfocado en las principales ideas de negocio, datos clave y conclusiones accionables. Responde en Español."
+            
+        import anthropic
+        client = anthropic.Anthropic(api_key=api_key)
+        response = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=1000,
+            messages=[{"role": "user", "content": f"{prompt_instructions}\n\nAquí está el contenido original del sitio web:\n\n{plain_text[:4000]}"}],
+        )
+        return {"preview": response.content[0].text}
+    except Exception as e:
+        return JSONResponse({"error": f"Error de previsualización: {str(e)}"}, status_code=500)
+
+
+@app.post("/convert/preview/")
+async def convert_preview(
+    file: UploadFile = File(...),
+    ai_prompt: str = Form("summary"),
+    x_user_email: str = Header(None, alias="X-User-Email")
+):
+    file_id = str(uuid.uuid4())
+    original_ext = os.path.splitext(file.filename or "")[1].lower().lstrip(".")
+    input_file = os.path.join(UPLOAD_DIR, f"{file_id}_preview.{original_ext}")
+    
+    with open(input_file, "wb") as buf:
+        shutil.copyfileobj(file.file, buf)
+        
+    try:
+        raw_text = extract_raw_text_from_file(input_file, original_ext)
+        os.remove(input_file)
+        if not raw_text.strip():
+            return JSONResponse({"error": "No se pudo extraer texto para la previsualización."}, status_code=400)
+            
+        api_key = os.getenv("ANTHROPIC_API_KEY")
+        if not api_key:
+            return {"preview": f"[Claude AI Preview Mode] (Nota: ANTHROPIC_API_KEY no configurada)\n\nContenido extraído:\n{raw_text[:800]}"}
+            
+        prompt_instructions = "Por favor, analiza el contenido del siguiente documento y reescríbelo como un Resumen Ejecutivo de lectura limpia, estructurado con títulos claros, subtítulos y viñetas elegantes. Responde en Español."
+        if ai_prompt == "formal":
+            prompt_instructions = "Por favor, analiza el contenido del siguiente documento y reescríbelo como un Reporte Profesional formal y altamente corporativo, ordenando los puntos clave y redactando de forma elocuente. Responde en Español."
+        elif ai_prompt == "translation":
+            prompt_instructions = "Por favor, traduce el contenido del siguiente documento al Español de forma fluida y profesional, organizando el texto con títulos y párrafos bien estructurados."
+        elif ai_prompt == "brief":
+            prompt_instructions = "Por favor, analiza el contenido del siguiente documento y redacta un Briefing Analítico conciso, enfocado en las principales ideas de negocio, datos clave y conclusiones accionables. Responde en Español."
+            
+        import anthropic
+        client = anthropic.Anthropic(api_key=api_key)
+        response = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=1000,
+            messages=[{"role": "user", "content": f"{prompt_instructions}\n\nAquí está el contenido original del documento:\n\n{raw_text[:4000]}"}],
+        )
+        return {"preview": response.content[0].text}
+    except Exception as e:
+        if os.path.exists(input_file):
+            os.remove(input_file)
+        return JSONResponse({"error": f"Error de previsualización: {str(e)}"}, status_code=500)

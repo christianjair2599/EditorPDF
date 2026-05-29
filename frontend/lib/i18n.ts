@@ -77,7 +77,7 @@ export function detectGeoInfo(): GeoInfo {
         };
       }
     }
-  } catch (e) {
+  } catch {
     // ignore
   }
 

@@ -59,8 +59,9 @@ export default function SupportBot() {
 
     try {
       const res = await sendSupportMessage(text, cleanHistory);
-      if (res?.reply) {
-        setMessages((prev) => [...prev, { role: "assistant", content: res.reply }]);
+      const replyText = res?.reply;
+      if (replyText) {
+        setMessages((prev) => [...prev, { role: "assistant", content: replyText }]);
       } else {
         setMessages((prev) => [
           ...prev,
