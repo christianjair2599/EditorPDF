@@ -1163,6 +1163,201 @@ async def convert_any(
     return {"message": "Conversión exitosa", "output_file": os.path.basename(output_file), "friendly_name": friendly_name}
 
 
+def url_to_pdf_high_fidelity(url: str, soup, output_path: str):
+    """Converts a BeautifulSoup web page object to a highly styled PDF document."""
+    from reportlab.lib.pagesizes import letter
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib import colors
+    from reportlab.lib.enums import TA_LEFT, TA_CENTER, TA_RIGHT, TA_JUSTIFY
+
+    doc = SimpleDocTemplate(
+        output_path, 
+        pagesize=letter,
+        leftMargin=45, 
+        rightMargin=45, 
+        topMargin=45, 
+        bottomMargin=45
+    )
+    
+    styles = getSampleStyleSheet()
+    styles_cache = {"Normal": styles["Normal"]}
+    
+    story = []
+    
+    # 1. Header (Title of Page and Source Link)
+    title = soup.title.string.strip() if soup.title and soup.title.string else "Sitio Web"
+    
+    title_style = ParagraphStyle(
+        name="URLTitle",
+        parent=styles["Normal"],
+        fontName="Helvetica-Bold",
+        fontSize=20,
+        leading=24,
+        textColor=colors.HexColor("#1e3a5f"),
+        spaceAfter=6
+    )
+    story.append(Paragraph(safe_text(title), title_style))
+    
+    source_style = ParagraphStyle(
+        name="URLSource",
+        parent=styles["Normal"],
+        fontName="Helvetica-Oblique",
+        fontSize=9,
+        leading=12,
+        textColor=colors.HexColor("#666666"),
+        spaceAfter=15
+    )
+    story.append(Paragraph(f"Fuente: <a href='{url}'><font color='#0066cc'>{safe_text(url)}</font></a>", source_style))
+    story.append(Spacer(1, 8))
+    
+    # Track which elements are already parsed (e.g. elements inside tables to avoid double parsing)
+    in_table_elements = set()
+    for table_el in soup.find_all("table"):
+        for sub_el in table_el.find_all(["h1", "h2", "h3", "h4", "p", "li", "blockquote", "pre", "td", "th"]):
+            in_table_elements.add(id(sub_el))
+            
+    # Traverse page elements
+    for el in soup.find_all(["h1", "h2", "h3", "h4", "p", "li", "blockquote", "pre", "table"]):
+        if id(el) in in_table_elements:
+            continue
+            
+        tag = el.name
+        
+        # A. TABLE
+        if tag == "table":
+            rows_data = []
+            for tr in el.find_all("tr"):
+                row_cells = []
+                for cell in tr.find_all(["td", "th"]):
+                    cell_text = cell.get_text(strip=True)
+                    cell_style = styles_cache.get("URLTableCell")
+                    if not cell_style:
+                        cell_style = ParagraphStyle(
+                            name="URLTableCell",
+                            parent=styles["Normal"],
+                            fontSize=9,
+                            leading=11,
+                            spaceAfter=2
+                        )
+                        styles_cache["URLTableCell"] = cell_style
+                    
+                    if cell.name == "th":
+                        cell_style = ParagraphStyle(
+                            name=f"URLTableHead_{len(styles_cache)}",
+                            parent=cell_style,
+                            fontName="Helvetica-Bold"
+                        )
+                    row_cells.append(Paragraph(safe_text(cell_text), cell_style))
+                if row_cells:
+                    rows_data.append(row_cells)
+                    
+            if not rows_data:
+                continue
+                
+            num_cols = max(len(r) for r in rows_data)
+            col_w = 522.0 / num_cols
+            col_widths = [col_w] * num_cols
+            
+            for r in rows_data:
+                while len(r) < num_cols:
+                    r.append(Paragraph("", styles_cache.get("URLTableCell")))
+                    
+            ts = TableStyle([
+                ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#cccccc")),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("PADDING", (0, 0), (-1, -1), 5),
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#eaeef3")),
+                ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f7f9fb")]),
+            ])
+            rl_table = Table(rows_data, colWidths=col_widths)
+            rl_table.setStyle(ts)
+            story.append(rl_table)
+            story.append(Spacer(1, 10))
+            
+        # B. TEXT TAGS
+        else:
+            text = el.get_text(strip=True)
+            if not text:
+                continue
+                
+            escaped = safe_text(text)
+            
+            font_size = 11
+            leading = 14
+            bold = False
+            italic = False
+            textColor = colors.HexColor("#333333")
+            space_before = 0
+            space_after = 6
+            left_indent = 0
+            
+            if tag == "h1":
+                font_size = 18
+                leading = 22
+                bold = True
+                textColor = colors.HexColor("#1e3a5f")
+                space_before = 12
+                space_after = 6
+            elif tag == "h2":
+                font_size = 15
+                leading = 18
+                bold = True
+                textColor = colors.HexColor("#2c3e50")
+                space_before = 10
+                space_after = 5
+            elif tag == "h3":
+                font_size = 13
+                leading = 16
+                bold = True
+                space_before = 8
+                space_after = 4
+            elif tag == "h4":
+                font_size = 11
+                leading = 14
+                bold = True
+                space_before = 6
+                space_after = 3
+            elif tag == "blockquote":
+                left_indent = 20
+                italic = True
+                textColor = colors.HexColor("#555555")
+                space_after = 8
+            elif tag == "pre":
+                font_size = 9
+                leading = 11
+                textColor = colors.HexColor("#000000")
+                space_after = 8
+            elif tag == "li":
+                left_indent = 15
+                escaped = "&bull;&nbsp;&nbsp;" + escaped
+                space_after = 3
+                
+            style_key = f"{tag}_{bold}_{italic}_{left_indent}"
+            if style_key not in styles_cache:
+                r_style = ParagraphStyle(
+                    name=f"Style_{style_key}_{len(styles_cache)}",
+                    parent=styles["Normal"],
+                    fontName="Courier" if tag == "pre" else ("Helvetica-Bold" if bold else ("Helvetica-Oblique" if italic else "Helvetica")),
+                    fontSize=font_size,
+                    leading=leading,
+                    textColor=textColor,
+                    leftIndent=left_indent,
+                    spaceBefore=space_before,
+                    spaceAfter=space_after
+                )
+                styles_cache[style_key] = r_style
+            else:
+                r_style = styles_cache[style_key]
+                
+            story.append(Paragraph(escaped, r_style))
+            
+    if not story:
+        story.append(Paragraph("(Sin contenido)", styles["Normal"]))
+        
+    doc.build(story)
+
+
 # ── URL → PDF / Image / TXT / HTML ───────────────────────────────────────────
 @app.post("/url-to-pdf/")
 async def url_to_format(url: str = Form(...), output_format: str = Form("pdf")):
@@ -1195,7 +1390,7 @@ async def url_to_format(url: str = Form(...), output_format: str = Form("pdf")):
 
         if fmt in ("pdf", "png", "jpg", "jpeg"):
             pdf_path = os.path.join(UPLOAD_DIR, f"{file_id}_tmp.pdf")
-            text_to_pdf(plain_text, pdf_path)
+            url_to_pdf_high_fidelity(url, soup, pdf_path)
 
             if fmt == "pdf":
                 out_path = pdf_path
