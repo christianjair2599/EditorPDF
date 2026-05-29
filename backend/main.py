@@ -1390,7 +1390,18 @@ async def url_to_format(url: str = Form(...), output_format: str = Form("pdf")):
 
         if fmt in ("pdf", "png", "jpg", "jpeg"):
             pdf_path = os.path.join(UPLOAD_DIR, f"{file_id}_tmp.pdf")
-            url_to_pdf_high_fidelity(url, soup, pdf_path)
+            try:
+                from urllib.parse import quote
+                microlink_url = f"https://api.microlink.io/?url={quote(url)}&pdf=true&embed=pdf.url"
+                api_resp = _req.get(microlink_url, timeout=35)
+                if api_resp.status_code == 200 and len(api_resp.content) > 1000:
+                    with open(pdf_path, "wb") as f:
+                        f.write(api_resp.content)
+                else:
+                    raise Exception(f"Microlink returned status {api_resp.status_code}")
+            except Exception as e:
+                print(f"Microlink print failed, falling back to local layout engine: {e}")
+                url_to_pdf_high_fidelity(url, soup, pdf_path)
 
             if fmt == "pdf":
                 out_path = pdf_path
